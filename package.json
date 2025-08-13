@@ -1,0 +1,27 @@
+{
+    "name": "traveloka-hotel-scraper",
+    "version": "1.0.0",
+    "description": "Otomasi untuk mengecek harga hotel di Traveloka setiap 3 jam",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "scrape": "node scraper.js",
+        "schedule": "node scheduler.js"
+    },
+    "keywords": [
+        "hotel",
+        "traveloka",
+        "scraping",
+        "automation"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "playwright": "^1.40.0",
+        "node-cron": "^3.0.3",
+        "chalk": "^4.1.2"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.40.0"
+    }
+}
