@@ -1,14 +1,42 @@
 const chalk = require('chalk');
 const readline = require('readline');
+
+// Load environment variables
+require('dotenv').config();
+
 const HotelScraper = require('./hotel-scraper');
 const HotelPriceScheduler = require('./scheduler');
+const DatabaseManager = require('./database');
 
 class HotelScraperApp {
     constructor() {
         this.rl = readline.createInterface({
             input: process.stdin,
-            output: process.stdout
+            output: process.stdout,
+            terminal: false // Prevent terminal echo issues
         });
+        this.db = new DatabaseManager();
+    }
+
+    // Helper method untuk membersihkan dan validasi input
+    cleanInput(input, fieldName = 'input') {
+        if (!input) return null;
+
+        // Clean input - remove extra spaces and special characters
+        const cleaned = input.trim().replace(/\s+/g, ' ');
+
+        // Validate input length
+        if (cleaned.length < 3) {
+            console.log(chalk.red(`❌ ${fieldName} terlalu pendek! Minimal 3 karakter.`));
+            return null;
+        }
+
+        if (cleaned.length > 100) {
+            console.log(chalk.red(`❌ ${fieldName} terlalu panjang! Maksimal 100 karakter.`));
+            return null;
+        }
+
+        return cleaned;
     }
 
     async showMenu() {
@@ -20,10 +48,12 @@ class HotelScraperApp {
         console.log(chalk.white('3. Scrape hotel di kota tertentu'));
         console.log(chalk.white('4. Scrape hotel berdasarkan nama hotel'));
         console.log(chalk.white('5. Pilih dari daftar hotel populer'));
-        console.log(chalk.white('6. Keluar'));
+        console.log(chalk.white('6. Lihat history scraping'));
+        console.log(chalk.white('7. Statistik scraping'));
+        console.log(chalk.white('8. Keluar'));
         console.log(chalk.blue('='.repeat(50)));
 
-        const choice = await this.question(chalk.yellow('Pilih menu (1-6): '));
+        const choice = await this.question(chalk.yellow('Pilih menu (1-8): '));
 
         switch (choice) {
             case '1':
@@ -42,6 +72,12 @@ class HotelScraperApp {
                 await this.runPopularHotelScraping();
                 break;
             case '6':
+                await this.showScrapingHistory();
+                break;
+            case '7':
+                await this.showScrapingStats();
+                break;
+            case '8':
                 console.log(chalk.green('👋 Terima kasih telah menggunakan Hotel Scraper!'));
                 this.rl.close();
                 process.exit(0);
@@ -56,26 +92,32 @@ class HotelScraperApp {
     async runManualScraping() {
         try {
             console.log(chalk.blue('🚀 Memulai scraping manual...'));
+            console.log(chalk.blue('💡 Tips: Ketik nama hotel dengan jelas (contoh: "Gets Hotel Malang")'));
 
             const rl = readline.createInterface({
                 input: process.stdin,
-                output: process.stdout
+                output: process.stdout,
+                terminal: false // Prevent terminal echo issues
             });
 
             return new Promise((resolve) => {
                 rl.question('Masukkan nama hotel yang ingin di-search: ', async (hotelName) => {
                     rl.close();
 
-                    if (!hotelName.trim()) {
-                        console.log(chalk.red('❌ Nama hotel tidak boleh kosong!'));
+                    // Clean dan validasi input
+                    const cleanHotelName = this.cleanInput(hotelName, 'Nama hotel');
+                    if (!cleanHotelName) {
                         resolve();
                         return;
                     }
 
+                    console.log(chalk.blue(`🔍 Akan search untuk: "${cleanHotelName}"`));
+                    console.log(chalk.blue('⏳ Memulai scraping...'));
+
                     const scraper = new HotelScraper();
 
                     try {
-                        await scraper.scrapeHotel(hotelName.trim());
+                        await scraper.scrapeHotel(cleanHotelName);
                     } catch (error) {
                         console.log(chalk.red(`❌ Error: ${error.message}`));
                     } finally {
@@ -101,22 +143,24 @@ class HotelScraperApp {
 
     async runCityScraping() {
         try {
+            console.log(chalk.blue('💡 Tips: Ketik nama kota dengan jelas (contoh: "Jakarta")'));
             const city = await this.question(chalk.yellow('Masukkan nama kota: '));
 
-            if (!city.trim()) {
-                console.log(chalk.red('❌ Nama kota tidak boleh kosong!'));
+            // Clean dan validasi input
+            const cleanCity = this.cleanInput(city, 'Nama kota');
+            if (!cleanCity) {
                 await this.waitAndShowMenu();
                 return;
             }
 
-            console.log(chalk.blue(`\n🚀 Memulai scraping untuk kota: ${city}`));
+            console.log(chalk.blue(`\n🚀 Memulai scraping untuk kota: ${cleanCity}`));
 
             const scraper = new HotelScraper();
 
             try {
-                await scraper.scrapeHotel('Hotel Indonesia', city);
+                await scraper.scrapeHotel('Hotel Indonesia', cleanCity);
             } catch (error) {
-                console.log(chalk.red(`❌ Error saat scraping kota ${city}: ${error.message}`));
+                console.log(chalk.red(`❌ Error saat scraping kota ${cleanCity}: ${error.message}`));
             } finally {
                 await scraper.cleanup();
             }
@@ -128,9 +172,12 @@ class HotelScraperApp {
 
     async runCustomHotelScraping() {
         try {
+            console.log(chalk.blue('💡 Tips: Ketik nama hotel dan kota dengan jelas'));
+
             const rl = readline.createInterface({
                 input: process.stdin,
-                output: process.stdout
+                output: process.stdout,
+                terminal: false // Prevent terminal echo issues
             });
 
             return new Promise((resolve) => {
@@ -138,16 +185,22 @@ class HotelScraperApp {
                     rl.question('Masukkan nama kota: ', async (cityName) => {
                         rl.close();
 
-                        if (!hotelName.trim() || !cityName.trim()) {
-                            console.log(chalk.red('❌ Nama hotel dan kota tidak boleh kosong!'));
+                        // Clean dan validasi input
+                        const cleanHotelName = this.cleanInput(hotelName, 'Nama hotel');
+                        const cleanCityName = this.cleanInput(cityName, 'Nama kota');
+
+                        if (!cleanHotelName || !cleanCityName) {
                             resolve();
                             return;
                         }
 
+                        console.log(chalk.blue(`🔍 Akan search untuk: "${cleanHotelName}" di "${cleanCityName}"`));
+                        console.log(chalk.blue('⏳ Memulai scraping...'));
+
                         const scraper = new HotelScraper();
 
                         try {
-                            await scraper.scrapeHotel(hotelName.trim());
+                            await scraper.scrapeHotel(cleanHotelName);
                         } catch (error) {
                             console.log(chalk.red(`❌ Error saat scraping hotel: ${error.message}`));
                         } finally {
@@ -227,6 +280,85 @@ class HotelScraperApp {
         console.log(chalk.blue('\n⏳ Tekan Enter untuk kembali ke menu utama...'));
         await this.question('');
         await this.showMenu();
+    }
+
+    async showScrapingHistory() {
+        try {
+            console.log(chalk.blue('\n📊 HISTORY SCRAPING HOTEL'));
+            console.log(chalk.blue('='.repeat(50)));
+
+            // Initialize database connection
+            await this.db.connect();
+
+            const history = await this.db.getScrapingHistory(20);
+
+            if (history.length === 0) {
+                console.log(chalk.yellow('📭 Belum ada data scraping yang tersimpan'));
+            } else {
+                console.log(chalk.green(`📈 Total ${history.length} data scraping:`));
+                console.log(chalk.blue('='.repeat(80)));
+
+                history.forEach((record, index) => {
+                    const timestamp = new Date(record.search_timestamp).toLocaleString('id-ID');
+                    const status = record.status === 'success' ? chalk.green('✅') : chalk.red('❌');
+                    const price = record.room_price ? `Rp ${record.room_price.toLocaleString('id-ID')}` : 'N/A';
+
+                    console.log(chalk.white(`${index + 1}. ${status} ${record.hotel_name}`));
+                    console.log(chalk.gray(`   🔍 Search: "${record.search_key}"`));
+                    console.log(chalk.gray(`   💰 Harga: ${price}`));
+                    console.log(chalk.gray(`   📅 Waktu: ${timestamp}`));
+                    console.log(chalk.gray(`   📸 Screenshot: ${record.screenshot_path || 'Tidak ada'}`));
+                    console.log('');
+                });
+            }
+
+        } catch (error) {
+            console.log(chalk.red(`❌ Error saat mengambil history: ${error.message}`));
+        } finally {
+            await this.waitAndShowMenu();
+        }
+    }
+
+    async showScrapingStats() {
+        try {
+            console.log(chalk.blue('\n📊 STATISTIK SCRAPING HOTEL'));
+            console.log(chalk.blue('='.repeat(50)));
+
+            // Initialize database connection
+            await this.db.connect();
+
+            const stats = await this.db.getSearchStats();
+
+            if (!stats) {
+                console.log(chalk.yellow('📭 Belum ada data statistik yang tersedia'));
+            } else {
+                console.log(chalk.green('📈 Statistik Keseluruhan:'));
+                console.log(chalk.blue('='.repeat(50)));
+
+                console.log(chalk.white(`🔍 Total Pencarian: ${stats.total_searches}`));
+                console.log(chalk.green(`✅ Berhasil: ${stats.successful_searches}`));
+                console.log(chalk.red(`❌ Gagal: ${stats.failed_searches}`));
+
+                if (stats.average_price) {
+                    console.log(chalk.blue(`💰 Rata-rata Harga: Rp ${stats.average_price.toLocaleString('id-ID', { maximumFractionDigits: 2 })}`));
+                }
+
+                if (stats.first_search) {
+                    const firstSearch = new Date(stats.first_search).toLocaleString('id-ID');
+                    console.log(chalk.gray(`📅 Pencarian Pertama: ${firstSearch}`));
+                }
+
+                if (stats.last_search) {
+                    const lastSearch = new Date(stats.last_search).toLocaleString('id-ID');
+                    console.log(chalk.gray(`📅 Pencarian Terakhir: ${lastSearch}`));
+                }
+            }
+
+        } catch (error) {
+            console.log(chalk.red(`❌ Error saat mengambil statistik: ${error.message}`));
+        } finally {
+            await this.waitAndShowMenu();
+        }
     }
 }
 

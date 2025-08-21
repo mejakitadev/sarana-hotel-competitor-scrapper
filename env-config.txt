@@ -1,0 +1,10 @@
+# Copy this content to your .env file
+# Database Configuration
+DB_USER=user_postgres
+DB_HOST=34.101.239.74
+DB_NAME=dev_zuri_assistant_ai
+DB_PASSWORD=your_actual_password
+DB_PORT=5432
+
+# Application Configuration
+NODE_ENV=development

@@ -6,7 +6,14 @@
     "scripts": {
         "start": "node index.js",
         "scrape": "node scraper.js",
-        "schedule": "node scheduler.js"
+        "schedule": "node scheduler.js",
+        "hourly": "node hourly-scheduler.js",
+        "main": "node main-menu.js",
+        "manage-hotels": "node manage-hotels.js",
+        "monitor": "node monitor.js",
+        "setup-db": "node setup-db.js",
+        "test-db": "node test-database.js",
+        "setup-env": "node setup-env.js"
     },
     "keywords": [
         "hotel",
@@ -17,9 +24,11 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "playwright": "^1.40.0",
+        "chalk": "^4.1.2",
+        "dotenv": "^16.6.1",
         "node-cron": "^3.0.3",
-        "chalk": "^4.1.2"
+        "pg": "^8.16.3",
+        "playwright": "^1.40.0"
     },
     "devDependencies": {
         "@playwright/test": "^1.40.0"

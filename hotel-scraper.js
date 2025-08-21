@@ -1,40 +1,77 @@
 const { firefox } = require('playwright');
 const chalk = require('chalk');
 
+// Load environment variables
+require('dotenv').config();
+
+const DatabaseManager = require('./database');
+
 class HotelScraper {
     constructor() {
         this.browser = null;
         this.page = null;
+        this.db = new DatabaseManager();
+    }
+
+    // Helper function untuk timestamp
+    getTimestamp() {
+        const now = new Date();
+        const hours = now.getHours().toString().padStart(2, '0');
+        const minutes = now.getMinutes().toString().padStart(2, '0');
+        const seconds = now.getSeconds().toString().padStart(2, '0');
+        return chalk.gray(`[${hours}:${minutes}:${seconds}]`);
+    }
+
+    // Helper function untuk log yang rapi
+    log(message, type = 'info') {
+        const timestamp = this.getTimestamp();
+        const colors = {
+            info: chalk.blue,
+            success: chalk.green,
+            warning: chalk.yellow,
+            error: chalk.red,
+            cyan: chalk.cyan
+        };
+
+        const color = colors[type] || chalk.white;
+        console.log(`${timestamp} ${color(message)}`);
     }
 
     async initialize() {
         try {
-            console.log(chalk.blue('🚀 Memulai browser Firefox untuk Hotel Scraper...'));
+            // Initialize database connection
+            await this.db.connect();
 
-            this.browser = await firefox.launch({
-                headless: false,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--disable-ipc-flooding-protection',
-                    '--disable-renderer-backgrounding',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-client-side-phishing-detection',
-                    '--disable-component-extensions-with-background-pages',
-                    '--disable-default-apps',
-                    '--disable-extensions',
-                    '--disable-sync',
-                    '--metrics-recording-only',
-                    '--no-first-run',
-                    '--safebrowsing-disable-auto-update'
-                ]
+            this.log('🚀 Memulai browser Firefox untuk Hotel Scraper...', 'info');
+
+            // Launch browser dengan timeout protection (menggunakan konfigurasi yang berhasil)
+            const browserPromise = firefox.launch({
+                headless: true,
+                timeout: 60000,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
             });
 
+            // Set timeout untuk browser launch
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Browser launch timeout setelah 60 detik')), 60000);
+            });
+
+            this.browser = await Promise.race([browserPromise, timeoutPromise]);
+
             this.page = await this.browser.newPage();
+
+            // Set timeout untuk page operations
+            this.page.setDefaultTimeout(60000); // 60 detik
+            this.page.setDefaultNavigationTimeout(60000); // 60 detik untuk navigation
+
             await this.page.setViewportSize({ width: 1366, height: 768 });
+
+            // Block Google requests yang menghalangi
+            await this.page.route('**/accounts.google.com/**', route => route.abort());
+            await this.page.route('**/gsi/iframe/**', route => route.abort());
+
+            // Event listener popup dihapus karena tidak diperlukan lagi
+            // Bot hanya akan extract data dari search results
 
             // Set user agent yang lebih realistic
             await this.page.setExtraHTTPHeaders({
@@ -51,25 +88,62 @@ class HotelScraper {
                 'Cache-Control': 'max-age=0'
             });
 
-            // Inject script untuk bypass detection
+            // Inject script untuk bypass detection dan block Google iframe
             await this.page.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+                // Block Google iframe yang menghalangi
+                const originalCreateElement = document.createElement;
+                document.createElement = function (tagName) {
+                    const element = originalCreateElement.call(this, tagName);
+                    if (tagName.toLowerCase() === 'iframe' && element.src && element.src.includes('accounts.google.com')) {
+                        element.style.display = 'none';
+                        element.style.visibility = 'hidden';
+                    }
+                    return element;
+                };
             });
 
-            console.log(chalk.green('✅ Browser Firefox berhasil dimulai'));
+            this.log('✅ Browser Firefox berhasil dimulai', 'success');
+
+            // Monitor browser process (disabled untuk kompatibilitas)
+            // if (this.browser.process()) {
+            //     this.log('🔍 Browser process ID:', this.browser.process().pid, 'info');
+            // }
+
+            // Health check - cek apakah browser masih responsive
+            try {
+                const version = await this.browser.version();
+                this.log(`🔍 Browser version: ${version}`, 'info');
+            } catch (healthError) {
+                this.log(`⚠️ Browser health check gagal: ${healthError.message}`, 'warning');
+            }
+
             return true;
 
         } catch (error) {
-            console.log(chalk.red(`❌ Gagal memulai browser: ${error.message}`));
+            this.log(`❌ Gagal memulai browser: ${error.message}`, 'error');
+
+            // Cleanup jika ada browser yang hang
+            if (this.browser) {
+                try {
+                    await this.browser.close();
+                    this.log('🧹 Browser yang hang berhasil dibersihkan', 'info');
+                } catch (cleanupError) {
+                    this.log(`⚠️ Gagal cleanup browser: ${cleanupError.message}`, 'warning');
+                }
+                this.browser = null;
+            }
+
             return false;
         }
     }
 
     async openTravelokaPage() {
         try {
-            console.log(chalk.blue('🌐 Membuka halaman Traveloka Hotel...'));
+            this.log('🌐 Membuka halaman Traveloka Hotel...', 'info');
 
             // Coba buka halaman dengan retry mechanism
             let response = null;
@@ -79,7 +153,7 @@ class HotelScraper {
             while (attempts < maxAttempts) {
                 try {
                     attempts++;
-                    console.log(chalk.blue(`🔄 Percobaan ke-${attempts} membuka halaman...`));
+                    this.log(`🔄 Percobaan ke-${attempts} membuka halaman...`, 'info');
 
                     response = await this.page.goto('https://www.traveloka.com/id-id/hotel', {
                         waitUntil: 'domcontentloaded',
@@ -87,7 +161,7 @@ class HotelScraper {
                     });
 
                     if (response && response.status() === 200) {
-                        console.log(chalk.green(`✅ Halaman berhasil dibuka pada percobaan ke-${attempts}`));
+                        this.log(`✅ Halaman berhasil dibuka pada percobaan ke-${attempts}`, 'success');
                         break;
                     } else {
                         throw new Error(`HTTP ${response?.status() || 'unknown'}`);
@@ -97,80 +171,203 @@ class HotelScraper {
                     if (attempts >= maxAttempts) {
                         throw new Error(`Gagal buka halaman setelah ${maxAttempts} percobaan: ${error.message}`);
                     }
-                    console.log(chalk.yellow(`⚠️ Percobaan ke-${attempts} gagal: ${error.message}`));
-                    console.log(chalk.blue('⏳ Menunggu 3 detik sebelum coba lagi...'));
+                    this.log(`⚠️ Percobaan ke-${attempts} gagal: ${error.message}`, 'warning');
+                    this.log('⏳ Menunggu 3 detik sebelum coba lagi...', 'info');
                     await this.page.waitForTimeout(3000);
                 }
             }
 
-            console.log(chalk.green('✅ Halaman berhasil dibuka'));
+            this.log('✅ Halaman berhasil dibuka', 'success');
             await this.page.waitForTimeout(8000);
 
             // Verifikasi halaman
             const title = await this.page.title();
-            console.log(chalk.blue(`📄 Title: ${title}`));
+            this.log(`📄 Title: ${title}`, 'info');
 
             return true;
 
         } catch (error) {
-            console.log(chalk.red(`❌ Gagal buka halaman: ${error.message}`));
+            this.log(`❌ Gagal buka halaman: ${error.message}`, 'error');
             return false;
         }
     }
 
     async waitForSearchResults() {
         try {
-            console.log(chalk.blue('⏳ Menunggu hasil search muncul...'));
+            this.log('⏳ Menunggu hasil search muncul...', 'info');
 
-            // Tunggu sampai URL berubah (menandakan search berhasil)
-            let currentURL = await this.page.url();
-            let attempts = 0;
-            const maxAttempts = 30; // 30 detik
+            // Wait for page to load completely
+            await this.page.waitForTimeout(3000);
 
-            while (attempts < maxAttempts) {
-                await this.page.waitForTimeout(1000);
-                const newURL = await this.page.url();
-
-                if (newURL !== currentURL && (newURL.includes('search') || newURL.includes('results'))) {
-                    console.log(chalk.green('✅ Search berhasil, URL berubah ke: ' + newURL));
-                    return true;
-                }
-
-                attempts++;
-                if (attempts % 10 === 0) {
-                    console.log(chalk.blue(`⏳ Masih menunggu... (${attempts}/${maxAttempts} detik)`));
-                }
+            // Method 1: Wait for hotel data elements to appear
+            try {
+                await this.page.waitForSelector('[data-testid="tvat-hotelName"]', { timeout: 10000 });
+                this.log('✅ Hotel names found with data-testid', 'success');
+                return true;
+            } catch (error) {
+                this.log('⚠️ data-testid selector not found, trying fallback...', 'warning');
             }
 
-            console.log(chalk.yellow('⚠️ Timeout menunggu hasil search'));
+            // Method 2: Wait for any hotel-related content
+            try {
+                await this.page.waitForSelector('[class*="hotel"], [class*="property"], [class*="listing"]', { timeout: 10000 });
+                this.log('✅ Hotel content found with class selectors', 'success');
+                return true;
+            } catch (error) {
+                this.log('⚠️ Class selectors not found, trying fallback...', 'warning');
+            }
+
+            // Method 3: Wait for any content that looks like search results
+            try {
+                await this.page.waitForFunction(() => {
+                    const text = document.body.textContent || '';
+                    return text.includes('Rp') || text.includes('hotel') || text.includes('Hotel');
+                }, { timeout: 10000 });
+                this.log('✅ Search results content found', 'success');
+                return true;
+            } catch (error) {
+                this.log('⚠️ Content detection failed', 'warning');
+            }
+
+            this.log('❌ Timeout menunggu hasil search', 'error');
             return false;
 
         } catch (error) {
-            console.log(chalk.red(`❌ Error saat menunggu search results: ${error.message}`));
+            this.log(`❌ Error saat menunggu hasil search: ${error.message}`, 'error');
             return false;
+        }
+    }
+
+    async dismissOverlaysAndModals() {
+        try {
+            this.log('🔒 Mencoba dismiss overlay dan modal...', 'info');
+
+            // Method 1: Click outside to dismiss overlays (PERBAIKAN: dengan retry dan timeout yang lebih pendek)
+            try {
+                this.log('🎯 Mencoba click outside untuk dismiss overlay...', 'info');
+
+                let clickSuccess = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        this.log(`🔄 Percobaan click outside ke-${attempt}...`, 'info');
+
+                        // Tunggu body element siap dengan timeout yang lebih pendek
+                        await this.page.waitForSelector('body', { timeout: 3000 });
+
+                        // Click dengan timeout yang lebih pendek dan force jika diperlukan
+                        await this.page.click('body', {
+                            position: { x: 100, y: 100 },
+                            timeout: 5000, // PERBAIKAN: Timeout lebih pendek
+                            force: attempt === 3 // Force click pada percobaan terakhir
+                        });
+
+                        this.log(`✅ Click outside berhasil pada percobaan ke-${attempt}`, 'success');
+                        clickSuccess = true;
+                        break;
+
+                    } catch (clickError) {
+                        this.log(`⚠️ Percobaan ke-${attempt} gagal: ${clickError.message}`, 'warning');
+
+                        if (attempt < 3) {
+                            this.log('⏳ Menunggu 1 detik sebelum coba lagi...', 'info');
+                            await this.page.waitForTimeout(1000);
+                        }
+                    }
+                }
+
+                if (clickSuccess) {
+                    await this.page.waitForTimeout(1000);
+                } else {
+                    this.log('⚠️ Click outside gagal, lanjut ke method berikutnya', 'warning');
+                }
+
+            } catch (error) {
+                this.log(`⚠️ Click outside failed: ${error.message}`, 'warning');
+            }
+
+            // Method 2: Press Escape key
+            try {
+                await this.page.keyboard.press('Escape');
+                this.log('✅ Pressed Escape to dismiss modal', 'success');
+                await this.page.waitForTimeout(1000);
+            } catch (error) {
+                this.log(`⚠️ Escape key failed: ${error.message}`, 'warning');
+            }
+
+            // Method 3: Look for and close specific overlay elements
+            try {
+                const overlaySelectors = [
+                    '[class*="overlay"]',
+                    '[class*="modal"]',
+                    '[class*="popup"]',
+                    '[class*="loading"]',
+                    '[class*="spinner"]',
+                    '[class*="blue"]',
+                    '[style*="background-color: blue"]',
+                    '[style*="background: blue"]'
+                ];
+
+                for (const selector of overlaySelectors) {
+                    const overlays = await this.page.$$(selector);
+                    if (overlays.length > 0) {
+                        this.log(`Found ${overlays.length} overlay elements with selector: ${selector}`, 'info');
+
+                        for (const overlay of overlays) {
+                            try {
+                                // Try to click close button or the overlay itself
+                                const closeButton = await overlay.$('[class*="close"], [class*="dismiss"], [aria-label*="close"], [aria-label*="dismiss"]');
+                                if (closeButton) {
+                                    await closeButton.click();
+                                    this.log('✅ Closed overlay with close button', 'success');
+                                } else {
+                                    await overlay.click();
+                                    this.log('✅ Clicked overlay to dismiss', 'success');
+                                }
+                                await this.page.waitForTimeout(500);
+                            } catch (error) {
+                                this.log(`⚠️ Failed to dismiss overlay: ${error.message}`, 'warning');
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                this.log(`⚠️ Overlay dismissal failed: ${error.message}`, 'warning');
+            }
+
+            // Method 4: Wait for overlays to disappear naturally
+            try {
+                await this.page.waitForFunction(() => {
+                    const overlays = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="popup"], [class*="loading"]');
+                    return overlays.length === 0;
+                }, { timeout: 5000 });
+                this.log('✅ Overlays disappeared naturally', 'success');
+            } catch (error) {
+                this.log(`⚠️ Waiting for overlays to disappear failed: ${error.message}`, 'warning');
+            }
+
+            this.log('✅ Overlay dismissal completed', 'success');
+
+        } catch (error) {
+            this.log(`❌ Error saat dismiss overlay: ${error.message}`, 'error');
         }
     }
 
     async extractHotelData(searchHotelName) {
         try {
-            console.log(chalk.blue('🔍 Mulai extract data hotel...'));
+            this.log('🔍 Mulai extract data hotel...', 'info');
 
             // Tunggu halaman load sempurna
             await this.page.waitForTimeout(5000);
 
             // Screenshot untuk debugging
             await this.page.screenshot({ path: 'hotel-search-results.png', fullPage: true });
-            console.log(chalk.blue('📸 Screenshot disimpan: hotel-search-results.png'));
+            this.log('📸 Screenshot disimpan: hotel-search-results.png', 'info');
 
             // Extract data hotel yang sesuai dengan search
             const hotelData = await this.page.evaluate((searchName) => {
-                console.log(`🔍 Mencari hotel: "${searchName}"...`);
-
                 // Method 1: Cari berdasarkan data-testid yang spesifik untuk Traveloka
                 const hotelNameElements = document.querySelectorAll('[data-testid="tvat-hotelName"]');
                 const hotelPriceElements = document.querySelectorAll('[data-testid="tvat-hotelPrice"]');
-
-                console.log(`Found ${hotelNameElements.length} hotel names and ${hotelPriceElements.length} hotel prices`);
 
                 // Cari hotel yang sesuai dengan search name
                 let targetHotelName = '';
@@ -182,7 +379,6 @@ class HotelScraper {
 
                     if (nameText.toLowerCase().includes(searchName.toLowerCase())) {
                         targetHotelName = nameText.trim();
-                        console.log('✅ Found target hotel name:', targetHotelName);
 
                         // Cari harga yang sesuai (biasanya di index yang sama atau berdekatan)
                         if (hotelPriceElements[i]) {
@@ -192,7 +388,6 @@ class HotelScraper {
                                 const priceMatch = priceText.match(/(Rp\s*\d+[.,\d]*)/);
                                 if (priceMatch) {
                                     targetHotelPrice = priceMatch[1].trim();
-                                    console.log('✅ Found target hotel price:', targetHotelPrice);
                                 }
                             }
                         }
@@ -200,16 +395,56 @@ class HotelScraper {
                     }
                 }
 
-                // Method 2: Fallback jika data-testid tidak ditemukan
+                // Method 2: Fallback - cari berdasarkan class yang umum untuk Traveloka
                 if (!targetHotelName) {
-                    console.log('❌ Hotel tidak ditemukan dengan data-testid, mencoba fallback...');
+                    // Cari berdasarkan class yang umum untuk hotel names
+                    const hotelNameSelectors = [
+                        '[class*="hotel-name"]',
+                        '[class*="property-name"]',
+                        '[class*="hotel-title"]',
+                        '[class*="hotel-name"]',
+                        'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
+                    ];
 
-                    // Cari berdasarkan text content
+                    for (const selector of hotelNameSelectors) {
+                        const elements = document.querySelectorAll(selector);
+                        for (const element of elements) {
+                            const text = element.textContent || '';
+                            if (text.toLowerCase().includes(searchName.toLowerCase()) && text.length > 3) {
+                                targetHotelName = text.trim();
+
+                                // Cari harga di parent container
+                                let container = element;
+                                for (let i = 0; i < 5; i++) {
+                                    if (container.parentElement) {
+                                        container = container.parentElement;
+                                        const containerText = container.textContent || '';
+
+                                        if (containerText.includes('Rp')) {
+                                            const priceMatch = containerText.match(/(Rp\s*\d+[.,\d]*)/);
+                                            if (priceMatch) {
+                                                targetHotelPrice = priceMatch[1].trim();
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (targetHotelName) break;
+                            }
+                        }
+                        if (targetHotelName) break;
+                    }
+                }
+
+                // Method 3: Fallback - cari berdasarkan text content yang lebih luas
+                if (!targetHotelName) {
+                    // Cari berdasarkan text content yang lebih luas
                     const allElements = document.querySelectorAll('*');
+
                     for (const element of allElements) {
                         const text = element.textContent || '';
                         if (text.toLowerCase().includes(searchName.toLowerCase()) &&
-                            (text.includes('Hotel') || text.includes('hotel'))) {
+                            (text.includes('Hotel') || text.includes('hotel') || text.includes('Rp'))) {
 
                             // Cari parent container yang berisi harga
                             let container = element;
@@ -226,8 +461,6 @@ class HotelScraper {
                                         if (priceMatch) {
                                             targetHotelPrice = priceMatch[1].trim();
                                         }
-
-                                        console.log('✅ Found with fallback method:', targetHotelName, targetHotelPrice);
                                         break;
                                     }
                                 }
@@ -237,11 +470,6 @@ class HotelScraper {
                     }
                 }
 
-                // Debug info
-                console.log('📊 Data yang ditemukan:');
-                console.log('   Nama:', targetHotelName);
-                console.log('   Harga:', targetHotelPrice);
-
                 return {
                     name: targetHotelName || searchName,
                     roomPrice: targetHotelPrice || 'N/A'
@@ -249,73 +477,570 @@ class HotelScraper {
             }, searchHotelName);
 
             if (hotelData) {
-                console.log(chalk.green('✅ Data hotel berhasil di-extract:'));
-                console.log(chalk.blue(`   🏨 Nama: ${hotelData.name}`));
-                console.log(chalk.blue(`   💰 Harga Kamar: ${hotelData.roomPrice}`));
+                // Validasi data sebelum save
+                if (!hotelData.name || hotelData.name === 'undefined' || hotelData.name.trim() === '') {
+                    this.log('⚠️ Nama hotel tidak valid, menggunakan search query sebagai fallback', 'warning');
+                    hotelData.name = searchHotelName;
+                }
+
+                if (!hotelData.roomPrice || hotelData.roomPrice === 'undefined' || hotelData.roomPrice === 'N/A') {
+                    this.log('⚠️ Harga kamar tidak tersedia', 'warning');
+                    hotelData.roomPrice = 'Tidak tersedia';
+                }
+
+                this.log('✅ Data hotel berhasil di-extract:', 'success');
+                this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
+                this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
+
+                // Simpan hasil ke database hanya jika data valid
+                if (this.db.isConnected && hotelData.name && hotelData.roomPrice !== 'Tidak tersedia') {
+                    try {
+                        // Extract angka dari harga (hapus "Rp" dan spasi)
+                        const priceNumber = hotelData.roomPrice.replace(/[^\d]/g, '');
+
+                        // Validasi harga
+                        if (priceNumber && priceNumber.length > 0) {
+                            const screenshotPath = 'hotel-search-results.png';
+
+                            // Cek apakah hotel sudah ada di database
+                            const existingHotel = await this.db.getHotelByName(hotelData.name);
+
+                            if (existingHotel) {
+                                // Update hanya harga jika hotel sudah ada
+                                await this.db.updateHotelPrice(
+                                    existingHotel.id,
+                                    parseFloat(priceNumber),
+                                    screenshotPath
+                                );
+                                this.log('✅ Harga hotel berhasil di-update di database', 'success');
+                            } else {
+                                // Insert baru jika hotel belum ada
+                                await this.db.saveScrapingResult(
+                                    searchHotelName,
+                                    hotelData.name,
+                                    parseFloat(priceNumber),
+                                    screenshotPath,
+                                    'success'
+                                );
+                                this.log('✅ Data hotel baru berhasil disimpan ke database', 'success');
+                            }
+                        } else {
+                            // Jika harga tidak valid, simpan dengan status failed
+                            await this.db.saveScrapingResult(
+                                searchHotelName,
+                                hotelData.name,
+                                null,
+                                null,
+                                'failed',
+                                'Harga tidak valid'
+                            );
+                            this.log('⚠️ Harga tidak valid, data disimpan dengan status failed', 'warning');
+                        }
+                    } catch (dbError) {
+                        this.log(`⚠️ Gagal menyimpan ke database: ${dbError.message}`, 'warning');
+                    }
+                } else {
+                    this.log('⚠️ Data tidak valid atau database tidak tersedia, tidak disimpan', 'warning');
+                }
+
                 return hotelData;
             } else {
-                console.log(chalk.yellow('⚠️ Tidak ada data hotel yang ditemukan'));
+                this.log('⚠️ Tidak ada data hotel yang ditemukan', 'warning');
+
+                // Simpan error ke database
+                if (this.db.isConnected) {
+                    try {
+                        await this.db.saveScrapingResult(
+                            searchHotelName,
+                            'N/A',
+                            null,
+                            null,
+                            'failed',
+                            'Hotel tidak ditemukan'
+                        );
+                    } catch (dbError) {
+                        this.log(`⚠️ Gagal menyimpan error ke database: ${dbError.message}`, 'warning');
+                    }
+                }
+
                 return null;
             }
 
         } catch (error) {
-            console.log(chalk.red(`❌ Error saat extract data: ${error.message}`));
+            this.log(`❌ Error saat extract data: ${error.message}`, 'error');
             return null;
         }
     }
 
     async searchHotel(hotelName) {
         try {
-            console.log(chalk.blue(`🔍 Mencari hotel: "${hotelName}"...`));
+            this.log(`🔍 Mencari hotel: "${hotelName}"...`, 'info');
 
-            // Cari input field
-            const inputField = await this.page.$('input[placeholder*="hotel"], input[placeholder*="kota"], [class*="search-input"]');
+            // Tunggu halaman load sempurna
+            await this.page.waitForTimeout(3000);
+
+            // Debug: Screenshot sebelum search
+            await this.page.screenshot({ path: 'before-search.png', fullPage: false });
+            this.log('📸 Screenshot sebelum search: before-search.png', 'info');
+
+            // Method 1: Cari input field dengan selector yang lebih spesifik untuk Traveloka
+            let inputField = await this.page.$('input[placeholder*="hotel"], input[placeholder*="kota"], input[placeholder*="Hotel"], input[placeholder*="Kota"]');
+
+            // Method 2: Fallback - cari berdasarkan class atau data-testid
             if (!inputField) {
-                throw new Error('Input field tidak ditemukan');
+                inputField = await this.page.$('[class*="search-input"], [class*="searchInput"], [data-testid*="search"], [class*="input"]');
             }
 
-            // Clear dan isi dengan nama hotel
-            await inputField.click();
-            await inputField.fill('');
-            await inputField.type(hotelName, { delay: 100 });
-            console.log(chalk.green(`✅ Sudah ketik: "${hotelName}"`));
+            // Method 3: Fallback - cari semua input yang mungkin
+            if (!inputField) {
+                const allInputs = await this.page.$$('input');
+                this.log(`Found ${allInputs.length} input fields, searching for search input...`, 'info');
+
+                for (const input of allInputs) {
+                    const placeholder = await input.getAttribute('placeholder') || '';
+                    const className = await input.getAttribute('class') || '';
+                    const type = await input.getAttribute('type') || '';
+
+                    if (placeholder.toLowerCase().includes('hotel') ||
+                        placeholder.toLowerCase().includes('kota') ||
+                        className.toLowerCase().includes('search') ||
+                        (type === 'text' && (placeholder || className))) {
+                        inputField = input;
+                        this.log(`✅ Selected input: placeholder="${placeholder}", class="${className}"`, 'success');
+                        break;
+                    }
+                }
+            }
+
+            if (!inputField) {
+                throw new Error('Input field pencarian tidak ditemukan');
+            }
+
+            this.log('✅ Input field ditemukan', 'success');
+
+            // Clear dan isi dengan nama hotel dengan error handling yang lebih baik
+            try {
+                // Tunggu input field siap
+                await this.page.waitForTimeout(1000);
+
+                // Coba click dengan timeout yang lebih panjang
+                await inputField.click({ timeout: 30000 });
+                await this.page.waitForTimeout(1000);
+
+                // Clear input
+                await inputField.fill('');
+                await this.page.waitForTimeout(500);
+
+                // Type dengan delay yang lebih pendek
+                await inputField.type(hotelName, { delay: 50 });
+                this.log(`✅ Sudah ketik: "${hotelName}"`, 'success');
+
+            } catch (clickError) {
+                this.log(`⚠️ Error saat click input field: ${clickError.message}`, 'warning');
+                this.log('🔄 Mencoba method alternatif...', 'info');
+
+                try {
+                    // Method alternatif: focus dan type langsung
+                    await inputField.focus();
+                    await this.page.waitForTimeout(500);
+                    await inputField.fill(hotelName);
+                    this.log(`✅ Berhasil ketik dengan method alternatif: "${hotelName}"`, 'success');
+                } catch (focusError) {
+                    this.log(`⚠️ Method alternatif juga gagal: ${focusError.message}`, 'warning');
+                    throw new Error(`Gagal mengisi input field: ${focusError.message}`);
+                }
+            }
 
             // Tunggu recommendations muncul
             await this.page.waitForTimeout(3000);
 
-            // Cari dan klik recommendation yang tepat
-            const recommendations = await this.page.$$('[class*="dropdown"], [class*="suggestion"], [class*="autocomplete"], [role="option"]');
+            // Debug: Screenshot setelah ketik
+            await this.page.screenshot({ path: 'after-typing.png', fullPage: false });
+            this.log('📸 Screenshot setelah ketik: after-typing.png', 'info');
 
-            let recommendationClicked = false;
-            for (const rec of recommendations) {
-                const text = await rec.textContent();
-                if (text && text.toLowerCase().includes(hotelName.toLowerCase())) {
-                    await rec.click();
-                    console.log(chalk.green('✅ Recommendation diklik: ' + text.trim()));
-                    recommendationClicked = true;
+            // Cari dan klik recommendation yang sesuai untuk menutup dropdown
+            this.log('🔍 Mencari recommendation yang sesuai...', 'info');
+
+            const recommendationSelectors = [
+                // Selector spesifik untuk Traveloka
+                '[data-testid="autocomplete-item-name"]',
+                '[class*="autocomplete-item"]',
+                '[class*="suggestion-item"]',
+                '[class*="dropdown-item"]',
+                '[class*="recommendation-item"]',
+                // Fallback selectors
+                '[class*="dropdown"]',
+                '[class*="suggestion"]',
+                '[class*="autocomplete"]',
+                '[role="option"]',
+                '[class*="option"]',
+                '[class*="item"]'
+            ];
+
+            let recommendations = [];
+            for (const selector of recommendationSelectors) {
+                const elements = await this.page.$$(selector);
+                if (elements.length > 0) {
+                    recommendations = elements;
+                    this.log(`Found ${elements.length} recommendations with selector: ${selector}`, 'info');
                     break;
                 }
             }
 
-            if (!recommendationClicked) {
-                console.log(chalk.yellow('⚠️ Tidak ada recommendation yang cocok, lanjut dengan input manual'));
+            let recommendationClicked = false;
+            if (recommendations.length > 0) {
+                for (const rec of recommendations) {
+                    try {
+                        const text = await rec.textContent();
+                        if (text && text.trim()) {
+                            // Cek apakah recommendation mengandung nama hotel yang dicari
+                            // Gunakan text matching yang lebih fleksibel
+                            const cleanText = text.toLowerCase().replace(/[^\w\s]/g, ''); // Hapus karakter khusus
+                            const cleanHotelName = hotelName.toLowerCase().replace(/[^\w\s]/g, ''); // Hapus karakter khusus
+
+                            // Cek apakah semua kata dalam hotel name ada di recommendation
+                            const hotelWords = cleanHotelName.split(' ').filter(word => word.length > 0);
+                            const matchingWords = hotelWords.filter(word => cleanText.includes(word));
+
+                            // Jika 70% kata cocok atau ada exact match
+                            if (matchingWords.length >= hotelWords.length * 0.7 ||
+                                cleanText.includes(cleanHotelName) ||
+                                cleanHotelName.includes(cleanText)) {
+
+                                // PERBAIKAN: Tunggu element benar-benar stabil sebelum click
+                                this.log(`🎯 Mencoba click recommendation: ${text.trim()}`, 'info');
+
+                                // Tunggu element visible dan stable
+                                await this.page.waitForTimeout(1000);
+
+                                // Coba click dengan timeout yang lebih pendek dan retry
+                                let clickSuccess = false;
+                                for (let attempt = 1; attempt <= 3; attempt++) {
+                                    try {
+                                        this.log(`🔄 Percobaan click ke-${attempt}...`, 'info');
+
+                                        // PERBAIKAN: Bypass waitForElementState jika terlalu lama
+                                        if (attempt <= 2) {
+                                            try {
+                                                // Tunggu element siap dengan timeout yang lebih pendek
+                                                await rec.waitForElementState('stable', { timeout: 5000 });
+                                            } catch (waitError) {
+                                                this.log(`⚠️ Wait for stable gagal, lanjut tanpa menunggu: ${waitError.message}`, 'warning');
+                                            }
+                                        }
+
+                                        // Click dengan force jika diperlukan
+                                        await rec.click({
+                                            timeout: 15000,
+                                            force: attempt === 3 // Force click pada percobaan terakhir
+                                        });
+
+                                        this.log(`✅ Recommendation berhasil diklik pada percobaan ke-${attempt}: ${text.trim()}`, 'success');
+                                        recommendationClicked = true;
+                                        clickSuccess = true;
+                                        break;
+
+                                    } catch (clickError) {
+                                        this.log(`⚠️ Percobaan ke-${attempt} gagal: ${clickError.message}`, 'warning');
+
+                                        if (attempt < 3) {
+                                            this.log('⏳ Menunggu 2 detik sebelum coba lagi...', 'info');
+                                            await this.page.waitForTimeout(2000);
+                                        }
+                                    }
+                                }
+
+                                if (clickSuccess) {
+                                    // Tunggu dropdown hilang dan input terisi
+                                    await this.page.waitForTimeout(2000);
+                                    break;
+                                } else {
+                                    this.log('❌ Semua percobaan click gagal, lanjut ke recommendation berikutnya', 'error');
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        this.log(`⚠️ Error saat baca recommendation: ${error.message}`, 'warning');
+                    }
+                }
+
+                if (!recommendationClicked) {
+                    this.log('⚠️ Tidak ada recommendation yang berhasil diklik', 'warning');
+
+                    // PERBAIKAN: Fallback mechanism jika recommendation gagal
+                    this.log('🔄 Mencoba fallback: tekan Enter untuk search tanpa recommendation...', 'info');
+                    try {
+                        // Tunggu sebentar untuk memastikan input field siap
+                        await this.page.waitForTimeout(1000);
+
+                        // Tekan Enter untuk search langsung
+                        await inputField.press('Enter');
+                        this.log('✅ Fallback Enter berhasil, melanjutkan search...', 'success');
+
+                        // Tunggu sebentar untuk search process
+                        await this.page.waitForTimeout(2000);
+
+                    } catch (fallbackError) {
+                        this.log(`⚠️ Fallback Enter juga gagal: ${fallbackError.message}`, 'warning');
+                    }
+                } else {
+                    this.log('✅ Recommendation berhasil diklik, melanjutkan...', 'success');
+                }
+            } else {
+                this.log('ℹ️ Tidak ada recommendations yang muncul', 'info');
             }
 
-            // Tunggu sebentar
-            await this.page.waitForTimeout(2000);
+            // PERBAIKAN: Pastikan dropdown benar-benar hilang sebelum cari tombol search
+            this.log('🔒 Memastikan dropdown benar-benar hilang...', 'info');
+
+            // Tunggu dropdown hilang dengan timeout yang lebih panjang
+            await this.page.waitForTimeout(3000);
+
+            // Coba dismiss dropdown dengan Escape jika masih ada
+            try {
+                const hasDropdown = await this.page.evaluate(() => {
+                    const dropdowns = document.querySelectorAll('[class*="dropdown"], [class*="autocomplete"], [class*="suggestion"], [role="listbox"]');
+                    return dropdowns.length > 0;
+                });
+
+                if (hasDropdown) {
+                    this.log('⚠️ Dropdown masih terlihat, mencoba dismiss dengan Escape...', 'warning');
+                    await this.page.keyboard.press('Escape');
+                    await this.page.waitForTimeout(2000);
+                }
+            } catch (error) {
+                this.log(`⚠️ Error saat cek dropdown: ${error.message}`, 'warning');
+            }
+
+            // Screenshot setelah dropdown ditutup
+            await this.page.screenshot({ path: 'dropdown-closed.png', fullPage: false });
+            this.log('📸 Screenshot setelah dropdown ditutup: dropdown-closed.png', 'info');
+
+            // Sekarang cari dan klik tombol cari yang sudah terlihat
+            this.log('🔍 Mencari tombol cari setelah dropdown ditutup...', 'info');
+
+            // Method 1: Cari tombol cari dengan text "Cari"
+            let searchButton = await this.page.$('button:has-text("Cari"), button:has-text("Search"), [class*="search-button"], [class*="btn-search"]');
+            if (searchButton) {
+                this.log('✅ Found search button with Method 1 (text-based selector)', 'success');
+            }
+
+            // Method 2: Fallback - cari berdasarkan class atau data-testid
+            if (!searchButton) {
+                searchButton = await this.page.$('[class*="search"], [class*="btn"], [data-testid*="search"], [class*="submit"]');
+                if (searchButton) {
+                    this.log('✅ Found search button with Method 2 (class-based selector)', 'success');
+                }
+            }
+
+            // Method 3: Fallback - cari semua button yang mungkin
+            if (!searchButton) {
+                this.log('�� Method 3: Scanning all buttons for search functionality...', 'info');
+                const allButtons = await this.page.$$('button, [role="button"], input[type="submit"]');
+
+                for (const button of allButtons) {
+                    try {
+                        const text = await button.textContent();
+                        const className = await button.getAttribute('class') || '';
+                        const type = await button.getAttribute('type') || '';
+
+                        if (text && (text.toLowerCase().includes('cari') ||
+                            text.toLowerCase().includes('search') ||
+                            className.toLowerCase().includes('search') ||
+                            type === 'submit')) {
+                            searchButton = button;
+                            this.log(`✅ Found search button with Method 3: "${text.trim()}"`, 'success');
+                            break;
+                        }
+                    } catch (error) {
+                        // Skip buttons that can't be read
+                    }
+                }
+            }
+
+            if (searchButton) {
+                try {
+                    // PERBAIKAN: Screenshot dengan timeout yang lebih pendek atau skip jika gagal
+                    try {
+                        await searchButton.screenshot({
+                            path: 'search-button-found.png',
+                            timeout: 10000 // Timeout lebih pendek untuk screenshot
+                        });
+                        this.log('📸 Screenshot tombol cari: search-button-found.png', 'info');
+                    } catch (screenshotError) {
+                        this.log(`⚠️ Screenshot tombol cari gagal, lanjut tanpa screenshot: ${screenshotError.message}`, 'warning');
+                    }
+
+                    // PERBAIKAN: Tunggu element stabil dan coba click dengan retry
+                    this.log('🎯 Mencoba click tombol search...', 'info');
+
+                    let clickSuccess = false;
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        try {
+                            this.log(`🔄 Percobaan click tombol search ke-${attempt}...`, 'info');
+
+                            // PERBAIKAN: Bypass waitForElementState jika terlalu lama
+                            if (attempt <= 2) {
+                                try {
+                                    // Tunggu element siap dengan timeout yang lebih pendek
+                                    await searchButton.waitForElementState('stable', { timeout: 5000 });
+                                } catch (waitError) {
+                                    this.log(`⚠️ Wait for stable gagal, lanjut tanpa menunggu: ${waitError.message}`, 'warning');
+                                }
+                            }
+
+                            // Click dengan timeout yang lebih pendek dan force jika diperlukan
+                            await searchButton.click({
+                                timeout: 15000,
+                                force: attempt === 3 // Force click pada percobaan terakhir
+                            });
+
+                            this.log(`✅ Tombol cari berhasil diklik pada percobaan ke-${attempt}!`, 'success');
+                            clickSuccess = true;
+                            break;
+
+                        } catch (clickError) {
+                            this.log(`⚠️ Percobaan ke-${attempt} gagal: ${clickError.message}`, 'warning');
+
+                            // Jika error karena Google iframe, coba dismiss overlay dulu
+                            if (clickError.message.includes('accounts.google.com') ||
+                                clickError.message.includes('intercepts pointer events')) {
+                                this.log('🚫 Google iframe menghalangi, coba dismiss overlay...', 'warning');
+                                try {
+                                    // Coba click di luar area untuk dismiss overlay
+                                    await this.page.click('body', { timeout: 3000 });
+                                    await this.page.keyboard.press('Escape');
+                                    await this.page.waitForTimeout(1000);
+                                } catch (dismissError) {
+                                    this.log('⚠️ Gagal dismiss Google overlay', 'warning');
+                                }
+                            }
+
+                            if (attempt < 3) {
+                                this.log('⏳ Menunggu 2 detik sebelum coba lagi...', 'info');
+                                await this.page.waitForTimeout(2000);
+                            }
+                        }
+                    }
+
+                    if (!clickSuccess) {
+                        throw new Error('Semua percobaan click tombol search gagal');
+                    }
+
+                    // Tunggu sebentar untuk search process
+                    await this.page.waitForTimeout(2000);
+
+                } catch (error) {
+                    this.log(`⚠️ Error saat klik tombol cari: ${error.message}`, 'warning');
+
+                    // Fallback: coba tekan Enter
+                    this.log('⌨️ Mencoba tekan Enter sebagai fallback...', 'info');
+                    await inputField.press('Enter');
+                }
+            } else {
+                this.log('⚠️ Tombol cari tidak ditemukan, mencoba tekan Enter...', 'warning');
+                await inputField.press('Enter');
+            }
+
+            // Tunggu sebentar untuk search process
+            await this.page.waitForTimeout(3000);
+
+            // Debug: Screenshot setelah search
+            await this.page.screenshot({ path: 'after-search.png', fullPage: false });
+            this.log('📸 Screenshot setelah search: after-search.png', 'info');
 
             return true;
 
         } catch (error) {
-            console.log(chalk.red(`❌ Error saat search: ${error.message}`));
+            this.log(`❌ Error saat search: ${error.message}`, 'error');
             return false;
+        }
+    }
+
+    // Fungsi clickFirstHotel dihapus karena tidak diperlukan lagi
+    // Bot hanya akan extract data dari search results
+
+    // Fungsi waitForHotelDetailPage dihapus karena tidak diperlukan lagi
+    // Bot hanya akan extract data dari search results
+
+    // Fungsi extractRoomDetails dihapus karena tidak diperlukan lagi
+    // Bot hanya akan extract data dari search results
+
+    async extractHotelLocation() {
+        try {
+            this.log('📍 Extracting hotel location...', 'info');
+
+            const location = await this.page.evaluate(() => {
+                // Method 1: Look for location elements with data-testid
+                const locationSelectors = [
+                    '[data-testid*="location"]',
+                    '[data-testid*="address"]',
+                    '[data-testid*="city"]'
+                ];
+
+                for (const selector of locationSelectors) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        const text = element.textContent || '';
+                        if (text.length > 3 && text.length < 100) {
+                            return text.trim();
+                        }
+                    }
+                }
+
+                // Method 2: Look for location elements by class
+                const classSelectors = [
+                    '[class*="location"]',
+                    '[class*="address"]',
+                    '[class*="city"]',
+                    '[class*="area"]'
+                ];
+
+                for (const selector of classSelectors) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        const text = element.textContent || '';
+                        if (text.length > 3 && text.length < 100) {
+                            return text.trim();
+                        }
+                    }
+                }
+
+                // Method 3: Look for common location patterns
+                const allElements = document.querySelectorAll('*');
+                for (const element of allElements) {
+                    const text = element.textContent || '';
+                    if (text.length > 3 && text.length < 100) {
+                        // Look for city names or location patterns
+                        if (text.includes('Malang') || text.includes('Jakarta') || text.includes('Bandung') ||
+                            text.includes('Surabaya') || text.includes('Yogyakarta') || text.includes('Semarang')) {
+                            return text.trim();
+                        }
+
+                        // Look for address patterns
+                        if (text.includes('Jl.') || text.includes('Street') || text.includes('Avenue') ||
+                            text.includes('Road') || text.includes('Boulevard')) {
+                            return text.trim();
+                        }
+                    }
+                }
+
+                return 'Lokasi tidak ditemukan';
+            });
+
+            this.log(`📍 Lokasi hotel: ${location}`, 'info');
+            return location;
+
+        } catch (error) {
+            this.log(`❌ Error saat extract location: ${error.message}`, 'error');
+            return 'Lokasi tidak ditemukan';
         }
     }
 
     async scrapeHotel(searchHotelName) {
         try {
-            console.log(chalk.blue(`🏨 HOTEL SCRAPER - "${searchHotelName}"`));
-            console.log(chalk.blue('=================================================='));
+            this.log(`🏨 HOTEL SCRAPER - "${searchHotelName}"`, 'info');
+            this.log('==================================================', 'info');
 
             // Initialize browser
             if (!await this.initialize()) {
@@ -327,34 +1052,171 @@ class HotelScraper {
                 throw new Error('Gagal buka halaman Traveloka');
             }
 
-            console.log(chalk.blue('📋 INSTRUKSI MANUAL:'));
-            console.log(chalk.blue('   - Halaman Traveloka Hotel sudah terbuka'));
-            console.log(chalk.blue(`   - Silakan search manual untuk hotel: "${searchHotelName}"`));
-            console.log(chalk.blue('   - Pastikan search berhasil dan ada hasil yang muncul'));
-            console.log(chalk.blue('   - Tunggu sampai halaman search results load sempurna'));
+            this.log('🔍 Mulai search hotel secara otomatis...', 'info');
 
-            // Tunggu hasil search
-            if (!await this.waitForSearchResults()) {
-                throw new Error('Gagal mendapatkan hasil search');
+            // Auto-fill form pencarian
+            if (!await this.searchHotel(searchHotelName)) {
+                throw new Error('Gagal search hotel');
             }
 
-            // Extract data hotel
-            const hotelData = await this.extractHotelData(searchHotelName);
+            // Wait for search results to appear
+            this.log('⏳ Menunggu hasil search muncul...', 'info');
 
-            if (hotelData) {
-                console.log(chalk.green('\n🎉 SCRAPING BERHASIL!'));
-                console.log(chalk.green('=================================================='));
-                console.log(chalk.white(`🔍 Search: "${searchHotelName}"`));
-                console.log(chalk.white(`🏨 Hotel: ${hotelData.name}`));
-                console.log(chalk.white(`💰 Harga Kamar: ${hotelData.roomPrice}`));
-                console.log(chalk.green('=================================================='));
+            try {
+                // Wait for hotel names to appear
+                await this.page.waitForSelector('[data-testid*="hotel-name"], [data-testid*="hotel"], [class*="hotel-name"], [class*="hotel"]', { timeout: 15000 });
+                this.log('✅ Hotel names found with data-testid', 'success');
+
+                // FIRST: Dismiss overlays that might be covering the results
+                this.log('🔒 Pertama, dismiss overlay dan modal yang menutupi hasil search...', 'info');
+                await this.dismissOverlaysAndModals();
+
+                // Take screenshot after dismissing overlays
+                try {
+                    await this.page.screenshot({ path: 'after-dismiss-overlay.png' });
+                    this.log(' Screenshot setelah dismiss overlay: after-dismiss-overlay.png', 'info');
+                } catch (screenshotError) {
+                    this.log(`⚠️ Failed to take screenshot: ${screenshotError.message}`, 'warning');
+                }
+
+                // SECOND: AFTER OVERLAY DISMISSED: Check for popup and dismiss it
+                this.log('🔒 Kedua, setelah overlay hilang, cek apakah ada popup...', 'info');
+                await this.dismissLoginPopup();
+
+                // THIRD: Extract hotel data from search results (tidak perlu ke detail page)
+                this.log('🔍 Ketiga, extract data hotel dari search results...', 'info');
+
+                // Extract hotel data from search results
+                this.log('🔍 Mulai extract data hotel dari search results...', 'info');
+                const hotelData = await this.extractHotelData(searchHotelName);
+
+                if (hotelData) {
+                    this.log('✅ Data hotel berhasil di-extract:', 'success');
+                    this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
+                    this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
+
+                    // Data sudah otomatis tersimpan di extractHotelData(), tidak perlu save lagi di sini
+                    this.log('💾 Data hotel sudah otomatis tersimpan ke database', 'success');
+
+                    // Take screenshot of search results
+                    try {
+                        await this.page.screenshot({ path: 'hotel-search-results.png' });
+                        this.log('📸 Screenshot disimpan: hotel-search-results.png', 'info');
+                    } catch (screenshotError) {
+                        this.log(`⚠️ Failed to take search results screenshot: ${screenshotError.message}`, 'warning');
+                    }
+
+                    // Extract hotel location
+                    this.log('📍 Extracting hotel location...', 'info');
+                    const location = await this.extractHotelLocation();
+                    if (location) {
+                        this.log(`📍 Lokasi hotel: ${location}`, 'cyan');
+                    }
+
+                    this.log('🎉 SCRAPING BERHASIL! Data hotel berhasil di-extract dari search results', 'success');
+                    this.log('💡 Anda bisa lihat hasil di screenshot: hotel-search-results.png', 'info');
+
+                    // Wait before closing browser
+                    this.log('⏳ Menunggu 5 detik sebelum tutup browser...', 'info');
+                    await this.page.waitForTimeout(5000);
+
+                    return {
+                        success: true,
+                        hotelName: hotelData.name,
+                        price: hotelData.roomPrice,
+                        location: location,
+                        message: 'Hotel data extracted from search results'
+                    };
+
+                } else {
+                    this.log('❌ Tidak ada data hotel yang ditemukan di search results', 'error');
+                    return {
+                        success: false,
+                        message: 'No hotel data found in search results'
+                    };
+                }
+
+            } catch (error) {
+                this.log(`⚠️ Error waiting for search results: ${error.message}`, 'warning');
+
+                // Fallback: try to extract basic hotel data
+                const hotelData = await this.extractHotelData(searchHotelName);
+                if (hotelData) {
+                    this.log('📋 Fallback: Menggunakan data hotel basic', 'info');
+                    this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
+                    this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
+
+                    // Data sudah otomatis tersimpan di extractHotelData(), tidak perlu simpan lagi
+                    this.log('💾 Data hotel sudah otomatis tersimpan ke database', 'success');
+
+                    // Give user time to see results before closing
+                    this.log('⏳ Menunggu 5 detik sebelum tutup browser...', 'info');
+                    this.log('💡 Anda bisa lihat hasil di screenshot: hotel-search-results.png', 'info');
+                    this.log('⏰ Browser akan tutup otomatis dalam 5 detik...', 'info');
+                    await this.page.waitForTimeout(5000); // 5 detik
+
+                    return {
+                        hotelName: searchHotelName,
+                        rooms: [{
+                            name: hotelData.name,
+                            price: hotelData.roomPrice,
+                            source: 'fallback'
+                        }],
+                        success: true
+                    };
+                }
             }
-
-            return hotelData;
 
         } catch (error) {
-            console.log(chalk.red(`❌ Error fatal dalam scraping: ${error.message}`));
+            this.log(`❌ Error fatal dalam scraping: ${error.message}`, 'error');
             return null;
+        }
+    }
+
+    async dismissLoginPopup() {
+        try {
+            this.log('🔒 Cek dan dismiss popup jika ada...', 'info');
+
+            // Tunggu sebentar untuk popup muncul
+            await this.page.waitForTimeout(3000);
+
+            // Check if popup exists
+            const hasPopup = await this.page.evaluate(() => {
+                const popups = document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="popup"], [class*="modal"], [class*="overlay"]');
+                return popups.length > 0;
+            });
+
+            if (!hasPopup) {
+                this.log('✅ Tidak ada popup yang muncul', 'success');
+                return;
+            }
+
+            this.log('🎯 Popup terdeteksi! Mencoba dismiss...', 'info');
+
+            // Take screenshot of popup for debugging
+            try {
+                await this.page.screenshot({ path: 'popup-appeared.png' });
+                this.log('📸 Screenshot popup: popup-appeared.png', 'info');
+            } catch (screenshotError) {
+                this.log(`⚠️ Failed to take popup screenshot: ${screenshotError.message}`, 'warning');
+            }
+
+            // Simple selector for "Nanti Saja" button
+            const nantiButton = await this.page.$('[role="button"]:has-text("nanti"), button:has-text("nanti"), div:has-text("nanti")');
+
+            if (nantiButton) {
+                this.log('✅ Tombol "Nanti Saja" ditemukan!', 'success');
+                await nantiButton.click();
+                this.log('✅ Popup berhasil di-dismiss', 'success');
+                await this.page.waitForTimeout(2000);
+            } else {
+                this.log('⚠️ Tombol "Nanti Saja" tidak ditemukan, menggunakan Escape...', 'warning');
+                await this.page.keyboard.press('Escape');
+                await this.page.waitForTimeout(2000);
+            }
+
+        } catch (error) {
+            this.log(`⚠️ Popup dismissal failed: ${error.message}`, 'warning');
         }
     }
 
@@ -362,18 +1224,23 @@ class HotelScraper {
         try {
             if (this.page) {
                 await this.page.close();
-                console.log(chalk.green('✅ Page ditutup'));
+                this.log('✅ Page ditutup', 'success');
             }
 
             if (this.browser) {
                 await this.browser.close();
-                console.log(chalk.green('✅ Browser ditutup'));
+                this.log('✅ Browser ditutup', 'success');
             }
 
-            console.log(chalk.green('✅ Semua resource dibersihkan'));
+            // Tutup koneksi database
+            if (this.db) {
+                await this.db.close();
+            }
+
+            this.log('✅ Semua resource dibersihkan', 'success');
 
         } catch (error) {
-            console.log(chalk.red(`❌ Error saat cleanup: ${error.message}`));
+            this.log(`❌ Error saat cleanup: ${error.message}`, 'error');
         }
     }
 }
@@ -387,25 +1254,47 @@ if (require.main === module) {
 
     const rl = readline.createInterface({
         input: process.stdin,
-        output: process.stdout
+        output: process.stdout,
+        terminal: false // Prevent terminal echo issues
     });
 
     async function main() {
         try {
             console.log(chalk.blue('🏨 TRAVELOKA HOTEL SCRAPER'));
             console.log(chalk.blue('=================================================='));
+            console.log(chalk.blue('💡 Tips: Ketik nama hotel dengan jelas (contoh: "Gets Hotel Malang")'));
+            console.log(chalk.blue('=================================================='));
 
             rl.question('Masukkan nama hotel yang ingin di-search: ', async (hotelName) => {
-                if (!hotelName.trim()) {
+                // Clean input - remove extra spaces and special characters
+                const cleanHotelName = hotelName.trim().replace(/\s+/g, ' ');
+
+                if (!cleanHotelName) {
                     console.log(chalk.red('❌ Nama hotel tidak boleh kosong!'));
                     rl.close();
                     return;
                 }
 
+                // Validate input length
+                if (cleanHotelName.length < 3) {
+                    console.log(chalk.red('❌ Nama hotel terlalu pendek! Minimal 3 karakter.'));
+                    rl.close();
+                    return;
+                }
+
+                if (cleanHotelName.length > 100) {
+                    console.log(chalk.red('❌ Nama hotel terlalu panjang! Maksimal 100 karakter.'));
+                    rl.close();
+                    return;
+                }
+
+                console.log(chalk.blue(`🔍 Akan search untuk: "${cleanHotelName}"`));
+                console.log(chalk.blue('⏳ Memulai scraping...'));
+
                 const scraper = new HotelScraper();
 
                 try {
-                    await scraper.scrapeHotel(hotelName.trim());
+                    await scraper.scrapeHotel(cleanHotelName);
                 } catch (error) {
                     console.log(chalk.red(`❌ Error: ${error.message}`));
                 } finally {
