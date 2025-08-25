@@ -14,6 +14,22 @@ class DatabaseManager {
 
     async connect() {
         try {
+            // Don't close existing pool if already connected
+            if (this.pool && this.isConnected) {
+                console.log(chalk.yellow('⚠️ Database sudah terkoneksi'));
+                return true;
+            }
+
+            // Close existing pool only if exists but not connected
+            if (this.pool && !this.isConnected) {
+                try {
+                    await this.pool.end();
+                } catch (error) {
+                    console.log(chalk.yellow('⚠️ Error closing existing pool:', error.message));
+                }
+                this.pool = null;
+            }
+
             // Konfigurasi database PostgreSQL
             this.pool = new Pool(getDbConfig());
 
@@ -35,28 +51,75 @@ class DatabaseManager {
         }
     }
 
+    async reconnect() {
+        console.log(chalk.yellow('🔄 Mencoba reconnect ke database...'));
+        this.isConnected = false;
+        return await this.connect();
+    }
+
+    async checkConnection() {
+        if (!this.pool || !this.isConnected) {
+            return false;
+        }
+
+        try {
+            const client = await this.pool.connect();
+            client.release();
+            return true;
+        } catch (error) {
+            console.log(chalk.red(`❌ Database connection check failed: ${error.message}`));
+            this.isConnected = false;
+            return false;
+        }
+    }
+
     async createTables() {
         try {
-            const createTableQuery = `
-                CREATE TABLE IF NOT EXISTS hotel_scraping_results (
+            // Create hotel_data table first (parent table)
+            const createHotelDataTableQuery = `
+                CREATE TABLE IF NOT EXISTS hotel_data (
                     id SERIAL PRIMARY KEY,
-                    search_key VARCHAR(255) NOT NULL,
                     hotel_name VARCHAR(255) NOT NULL,
+                    rate_harga DECIMAL(10,2) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_hotel_data_name ON hotel_data(hotel_name);
+                CREATE INDEX IF NOT EXISTS idx_hotel_data_created_at ON hotel_data(created_at);
+                CREATE INDEX IF NOT EXISTS idx_hotel_data_updated_at ON hotel_data(updated_at);
+            `;
+
+            await this.pool.query(createHotelDataTableQuery);
+
+            // Create hotel_scraping_results_log table (child table with foreign key)
+            const createScrapingLogTableQuery = `
+                CREATE TABLE IF NOT EXISTS hotel_scraping_results_log (
+                    id SERIAL PRIMARY KEY,
+                    hotel_id INTEGER NOT NULL,
+                    search_key VARCHAR(255) NOT NULL,
                     room_price DECIMAL(10,2),
                     price_currency VARCHAR(10) DEFAULT 'IDR',
                     search_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     screenshot_path VARCHAR(500),
                     status VARCHAR(50) DEFAULT 'success',
                     error_message TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    -- Foreign key constraint ke hotel_data
+                    CONSTRAINT fk_hotel_id 
+                        FOREIGN KEY (hotel_id) 
+                        REFERENCES hotel_data(id) 
+                        ON DELETE CASCADE
                 );
                 
-                CREATE INDEX IF NOT EXISTS idx_search_key ON hotel_scraping_results(search_key);
-                CREATE INDEX IF NOT EXISTS idx_hotel_name ON hotel_scraping_results(hotel_name);
-                CREATE INDEX IF NOT EXISTS idx_search_timestamp ON hotel_scraping_results(search_timestamp);
+                CREATE INDEX IF NOT EXISTS idx_scraping_log_hotel_id ON hotel_scraping_results_log(hotel_id);
+                CREATE INDEX IF NOT EXISTS idx_scraping_log_search_key ON hotel_scraping_results_log(search_key);
+                CREATE INDEX IF NOT EXISTS idx_scraping_log_search_timestamp ON hotel_scraping_results_log(search_timestamp);
+                CREATE INDEX IF NOT EXISTS idx_scraping_log_status ON hotel_scraping_results_log(status);
             `;
 
-            await this.pool.query(createTableQuery);
+            await this.pool.query(createScrapingLogTableQuery);
             console.log(chalk.green('✅ Tabel database berhasil dibuat/diverifikasi'));
         } catch (error) {
             console.log(chalk.red(`❌ Gagal membuat tabel: ${error.message}`));
@@ -76,70 +139,64 @@ class DatabaseManager {
             try {
                 await client.query('BEGIN');
 
-                // 1. Cek apakah data sudah ada berdasarkan search_key
-                const checkExistingQuery = `
-                    SELECT id FROM hotel_scraping_results 
-                    WHERE search_key = $1
+                let hotelId;
+
+                // 1. Cek apakah hotel sudah ada di hotel_data berdasarkan nama
+                const checkHotelQuery = `
+                    SELECT id FROM hotel_data 
+                    WHERE hotel_name ILIKE $1
                 `;
-                const existingResult = await client.query(checkExistingQuery, [searchKey]);
+                const existingHotel = await client.query(checkHotelQuery, [hotelName]);
 
-                let scrapingId;
+                if (existingHotel.rows.length > 0) {
+                    // Hotel sudah ada, gunakan ID yang ada
+                    hotelId = existingHotel.rows[0].id;
 
-                if (existingResult.rows.length > 0) {
-                    // Update data existing
-                    scrapingId = existingResult.rows[0].id;
-                    const updateQuery = `
-                        UPDATE hotel_scraping_results 
-                        SET hotel_name = $2, room_price = $3, screenshot_path = $4, 
-                            status = $5, error_message = $6, search_timestamp = CURRENT_TIMESTAMP
+                    // Update harga di hotel_data
+                    const updateHotelQuery = `
+                        UPDATE hotel_data 
+                        SET rate_harga = $2, updated_at = CURRENT_TIMESTAMP
                         WHERE id = $1
                         RETURNING id
                     `;
-                    const updateValues = [scrapingId, hotelName, roomPrice, screenshotPath, status, errorMessage];
-                    await client.query(updateQuery, updateValues);
+                    await client.query(updateHotelQuery, [hotelId, roomPrice]);
 
-                    console.log(chalk.blue(`🔄 Update data existing dengan ID: ${scrapingId}`));
+                    console.log(chalk.blue(`🔄 Update hotel existing dengan ID: ${hotelId}`));
                 } else {
-                    // Insert data baru
-                    const insertQuery = `
-                        INSERT INTO hotel_scraping_results 
-                        (search_key, hotel_name, room_price, screenshot_path, status, error_message)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                    // Hotel belum ada, buat baru di hotel_data
+                    const insertHotelQuery = `
+                        INSERT INTO hotel_data 
+                        (hotel_name, rate_harga)
+                        VALUES ($1, $2)
                         RETURNING id
                     `;
-                    const values = [searchKey, hotelName, roomPrice, screenshotPath, status, errorMessage];
-                    const result = await client.query(insertQuery, values);
-                    scrapingId = result.rows[0].id;
+                    const hotelResult = await client.query(insertHotelQuery, [hotelName, roomPrice]);
+                    hotelId = hotelResult.rows[0].id;
 
-                    console.log(chalk.green(`🆕 Insert data baru dengan ID: ${scrapingId}`));
+                    console.log(chalk.green(`🆕 Hotel baru dibuat dengan ID: ${hotelId}`));
                 }
 
-                // 2. Update hotel_data dengan foreign key
-                const upsertHotelDataQuery = `
-                    INSERT INTO hotel_data 
-                    (hotel_id, hotel_name, rate_harga)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (hotel_id) 
-                    DO UPDATE SET 
-                        hotel_name = EXCLUDED.hotel_name,
-                        rate_harga = EXCLUDED.rate_harga,
-                        updated_at = CURRENT_TIMESTAMP
-                    RETURNING hotel_id
+                // 2. Insert log scraping ke hotel_scraping_results_log
+                const insertLogQuery = `
+                    INSERT INTO hotel_scraping_results_log 
+                    (hotel_id, search_key, room_price, screenshot_path, status, error_message)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
                 `;
-
-                const hotelDataValues = [scrapingId, hotelName, roomPrice];
-                const hotelDataResult = await client.query(upsertHotelDataQuery, hotelDataValues);
+                const logValues = [hotelId, searchKey, roomPrice, screenshotPath, status, errorMessage];
+                const logResult = await client.query(insertLogQuery, logValues);
+                const logId = logResult.rows[0].id;
 
                 // Commit transaction
                 await client.query('COMMIT');
 
-                console.log(chalk.green(`💾 Data berhasil disimpan ke database dengan ID: ${scrapingId}`));
-                console.log(chalk.green(`   📊 Scraping ID: ${scrapingId}`));
-                console.log(chalk.green(`   🏨 Hotel Data ID: ${hotelDataResult.rows[0].hotel_id}`));
+                console.log(chalk.green(`💾 Data berhasil disimpan ke database`));
+                console.log(chalk.green(`   🏨 Hotel ID: ${hotelId}`));
+                console.log(chalk.green(`   📝 Log ID: ${logId}`));
 
                 return {
-                    scrapingId: scrapingId,
-                    hotelDataId: hotelDataResult.rows[0].hotel_id
+                    hotelId: hotelId,
+                    logId: logId
                 };
 
             } catch (error) {
@@ -163,7 +220,7 @@ class DatabaseManager {
 
         try {
             const query = `
-                SELECT * FROM hotel_scraping_results 
+                SELECT * FROM hotel_scraping_results_log 
                 ORDER BY search_timestamp DESC 
                 LIMIT $1
             `;
@@ -184,7 +241,7 @@ class DatabaseManager {
 
         try {
             const query = `
-                SELECT * FROM hotel_scraping_results 
+                SELECT * FROM hotel_scraping_results_log 
                 WHERE hotel_name ILIKE $1 
                 AND search_timestamp >= NOW() - INTERVAL '${days} days'
                 ORDER BY search_timestamp DESC
@@ -206,10 +263,10 @@ class DatabaseManager {
 
         try {
             const query = `
-                SELECT id, hotel_name, room_price, search_timestamp 
-                FROM hotel_scraping_results 
+                SELECT id, hotel_name, rate_harga, updated_at 
+                FROM hotel_data 
                 WHERE hotel_name ILIKE $1 
-                ORDER BY search_timestamp DESC 
+                ORDER BY updated_at DESC 
                 LIMIT 1
             `;
 
@@ -221,7 +278,7 @@ class DatabaseManager {
         }
     }
 
-    async updateHotelPrice(scrapingId, newPrice, screenshotPath = null) {
+    async updateHotelPrice(hotelId, newPrice, screenshotPath = null) {
         if (!this.isConnected) {
             console.log(chalk.yellow('⚠️ Database tidak terkoneksi'));
             return false;
@@ -234,35 +291,40 @@ class DatabaseManager {
             try {
                 await client.query('BEGIN');
 
-                // Update hanya harga dan screenshot, bukan nama hotel
-                const updateQuery = `
-                    UPDATE hotel_scraping_results
-                    SET room_price = $2, screenshot_path = $3,
-                        status = $4, error_message = $5, search_timestamp = CURRENT_TIMESTAMP
+                // Update harga di hotel_data
+                const updateHotelQuery = `
+                    UPDATE hotel_data
+                    SET rate_harga = $2, updated_at = CURRENT_TIMESTAMP
                     WHERE id = $1
                     RETURNING id
                 `;
 
-                const updateValues = [scrapingId, newPrice, screenshotPath, 'success', null];
-                const result = await client.query(updateQuery, updateValues);
+                const result = await client.query(updateHotelQuery, [hotelId, newPrice]);
 
                 if (result.rows.length === 0) {
                     throw new Error('Hotel tidak ditemukan dengan ID tersebut');
                 }
 
-                // Update juga di tabel hotel_data jika ada
-                const updateHotelDataQuery = `
-                    UPDATE hotel_data 
-                    SET rate_harga = $2, updated_at = CURRENT_TIMESTAMP
-                    WHERE hotel_id = $1
+                // Insert log scraping baru ke hotel_scraping_results_log
+                const insertLogQuery = `
+                    INSERT INTO hotel_scraping_results_log 
+                    (hotel_id, search_key, room_price, screenshot_path, status, error_message)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
                 `;
 
-                await client.query(updateHotelDataQuery, [scrapingId, newPrice]);
+                // Get hotel name for search_key
+                const hotelNameQuery = `SELECT hotel_name FROM hotel_data WHERE id = $1`;
+                const hotelNameResult = await client.query(hotelNameQuery, [hotelId]);
+                const hotelName = hotelNameResult.rows[0].hotel_name;
+
+                const logValues = [hotelId, hotelName, newPrice, screenshotPath, 'success', null];
+                await client.query(insertLogQuery, logValues);
 
                 // Commit transaction
                 await client.query('COMMIT');
 
-                console.log(chalk.green(`✅ Harga hotel berhasil di-update dengan ID: ${scrapingId}`));
+                console.log(chalk.green(`✅ Harga hotel berhasil di-update dengan ID: ${hotelId}`));
                 console.log(chalk.green(`   💰 Harga baru: ${newPrice}`));
 
                 return true;
@@ -295,7 +357,7 @@ class DatabaseManager {
                     AVG(room_price) as average_price,
                     MIN(search_timestamp) as first_search,
                     MAX(search_timestamp) as last_search
-                FROM hotel_scraping_results
+                FROM hotel_scraping_results_log
             `;
 
             const result = await this.pool.query(query);
@@ -316,17 +378,17 @@ class DatabaseManager {
         try {
             const query = `
                 SELECT 
-                    hd.hotel_id,
+                    hd.id,
                     hd.hotel_name,
                     hd.rate_harga,
                     hd.created_at,
                     hd.updated_at,
-                    hsr.search_key,
-                    hsr.search_timestamp,
-                    hsr.screenshot_path,
-                    hsr.status
+                    hsl.search_key,
+                    hsl.search_timestamp,
+                    hsl.screenshot_path,
+                    hsl.status
                 FROM hotel_data hd
-                JOIN hotel_scraping_results hsr ON hd.hotel_id = hsr.id
+                JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
                 ORDER BY hd.updated_at DESC
                 LIMIT $1
             `;
@@ -349,17 +411,17 @@ class DatabaseManager {
         try {
             const query = `
                 SELECT 
-                    hd.hotel_id,
+                    hd.id,
                     hd.hotel_name,
                     hd.rate_harga,
                     hd.created_at,
                     hd.updated_at,
-                    hsr.search_key,
-                    hsr.search_timestamp,
-                    hsr.screenshot_path,
-                    hsr.status
+                    hsl.search_key,
+                    hsl.search_timestamp,
+                    hsl.screenshot_path,
+                    hsl.status
                 FROM hotel_data hd
-                JOIN hotel_scraping_results hsr ON hd.hotel_id = hsr.id
+                JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
                 WHERE hd.hotel_name ILIKE $1
                 ORDER BY hd.updated_at DESC
                 LIMIT $2
@@ -383,18 +445,18 @@ class DatabaseManager {
         try {
             const query = `
                 SELECT 
-                    hd.hotel_id,
+                    hd.id,
                     hd.hotel_name,
                     hd.rate_harga,
                     hd.created_at,
                     hd.updated_at,
-                    hsr.search_key,
-                    hsr.search_timestamp,
-                    hsr.screenshot_path,
-                    hsr.status
+                    hsl.search_key,
+                    hsl.search_timestamp,
+                    hsl.screenshot_path,
+                    hsl.status
                 FROM hotel_data hd
-                JOIN hotel_scraping_results hsr ON hd.hotel_id = hsr.id
-                WHERE hsr.search_key ILIKE $1
+                JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
+                WHERE hsl.search_key ILIKE $1
                 ORDER BY hd.updated_at DESC
                 LIMIT $2
             `;
@@ -408,10 +470,223 @@ class DatabaseManager {
     }
 
     async close() {
-        if (this.pool) {
-            await this.pool.end();
+        if (this.pool && this.isConnected) {
+            try {
+                await this.pool.end();
+                this.isConnected = false;
+                console.log(chalk.blue('🔌 Koneksi database ditutup'));
+            } catch (error) {
+                console.log(chalk.yellow('⚠️ Error saat menutup database:', error.message));
+                this.isConnected = false;
+            }
+        } else {
+            console.log(chalk.yellow('⚠️ Database sudah ditutup atau tidak terkoneksi'));
+        }
+    }
+
+    // Method baru untuk flow scraping yang baru
+    async startScrapingLog(hotelId, hotelName, searchKey) {
+        // Ensure database connection before operation
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa membuat log scraping: database tidak terkoneksi'));
+            return null;
+        }
+
+        try {
+            const insertQuery = `
+                INSERT INTO hotel_scraping_results_log 
+                (hotel_id, search_key, status, error_message)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+            `;
+
+            const values = [hotelId, searchKey, 'in_progress', null];
+            const result = await this.pool.query(insertQuery, values);
+
+            console.log(chalk.blue(`📝 Log scraping dimulai untuk ${hotelName} (ID: ${result.rows[0].id})`));
+            return result.rows[0].id;
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal membuat log scraping: ${error.message}`));
+            return null;
+        }
+    }
+
+    async updateScrapingLogSuccess(logId, roomPrice, screenshotPath = null) {
+        // Ensure database connection before operation
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa update log scraping: database tidak terkoneksi'));
+            return false;
+        }
+
+        try {
+            // Instead of updating, create a new success log entry
+            const insertQuery = `
+                INSERT INTO hotel_scraping_results_log 
+                (hotel_id, search_key, room_price, screenshot_path, status, search_timestamp)
+                SELECT hotel_id, search_key, $2, $3, 'success', CURRENT_TIMESTAMP
+                FROM hotel_scraping_results_log
+                WHERE id = $1
+                RETURNING id
+            `;
+
+            const values = [logId, roomPrice, screenshotPath];
+            const result = await this.pool.query(insertQuery, values);
+
+            if (result.rows.length > 0) {
+                console.log(chalk.green(`✅ Log scraping success baru dibuat (ID: ${result.rows[0].id})`));
+                return true;
+            } else {
+                console.log(chalk.red(`❌ Log scraping tidak ditemukan (ID: ${logId})`));
+                return false;
+            }
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal membuat log scraping success: ${error.message}`));
+            return false;
+        }
+    }
+
+    async updateScrapingLogStatus(logId, newStatus) {
+        // Ensure database connection before operation
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa update status log scraping: database tidak terkoneksi'));
+            return false;
+        }
+
+        try {
+            // Only update status for in_progress logs (not success/error)
+            const updateQuery = `
+                UPDATE hotel_scraping_results_log 
+                SET status = $2, search_timestamp = CURRENT_TIMESTAMP
+                WHERE id = $1 AND status = 'in_progress'
+                RETURNING id
+            `;
+
+            const values = [logId, newStatus];
+            const result = await this.pool.query(updateQuery, values);
+
+            if (result.rows.length > 0) {
+                console.log(chalk.blue(`✅ Status log scraping diupdate ke '${newStatus}' (ID: ${logId})`));
+                return true;
+            } else {
+                console.log(chalk.yellow(`⚠️ Log scraping tidak ditemukan atau bukan in_progress (ID: ${logId})`));
+                return false;
+            }
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal update status log scraping: ${error.message}`));
+            return false;
+        }
+    }
+
+    async updateScrapingLogError(logId, errorMessage) {
+        // Ensure database connection before operation
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa update log scraping error: database tidak terkoneksi'));
+            return false;
+        }
+
+        try {
+            // Instead of updating, create a new error log entry
+            const insertQuery = `
+                INSERT INTO hotel_scraping_results_log 
+                (hotel_id, search_key, status, error_message, search_timestamp)
+                SELECT hotel_id, search_key, 'error', $2, CURRENT_TIMESTAMP
+                FROM hotel_scraping_results_log
+                WHERE id = $1
+                RETURNING id
+            `;
+
+            const values = [logId, errorMessage];
+            const result = await this.pool.query(insertQuery, values);
+
+            if (result.rows.length > 0) {
+                console.log(chalk.red(`❌ Log scraping error baru dibuat (ID: ${result.rows[0].id})`));
+                return true;
+            } else {
+                console.log(chalk.red(`❌ Log scraping tidak ditemukan (ID: ${logId})`));
+                return false;
+            }
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal membuat log scraping error: ${error.message}`));
+            return false;
+        }
+    }
+
+    async updateHotelDataPrice(hotelId, newPrice) {
+        // Ensure database connection before operation
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa update harga hotel: database tidak terkoneksi'));
+            return false;
+        }
+
+        try {
+            const updateQuery = `
+                UPDATE hotel_data 
+                SET rate_harga = $2, 
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id
+            `;
+
+            const values = [hotelId, newPrice];
+            const result = await this.pool.query(updateQuery, values);
+
+            if (result.rows.length > 0) {
+                console.log(chalk.green(`✅ Harga hotel berhasil diupdate (ID: ${hotelId})`));
+                return true;
+            } else {
+                console.log(chalk.red(`❌ Hotel tidak ditemukan (ID: ${hotelId})`));
+                return false;
+            }
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal update harga hotel: ${error.message}`));
+            return false;
+        }
+    }
+
+    // Method untuk mendapatkan hotel yang belum pernah di-scrape atau perlu di-update
+    async getHotelsForScraping(limit = 50) {
+        if (!this.isConnected) {
+            console.log(chalk.yellow('⚠️ Database tidak terkoneksi'));
+            return [];
+        }
+
+        try {
+            const query = `
+                SELECT 
+                    hd.id,
+                    hd.hotel_name,
+                    hd.rate_harga,
+                    hd.created_at,
+                    hd.updated_at,
+                    COALESCE(hd.hotel_name, '') as search_key
+                FROM hotel_data hd
+                ORDER BY hd.updated_at ASC
+                LIMIT $1
+            `;
+
+            const result = await this.pool.query(query, [limit]);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal mengambil data hotel untuk scraping: ${error.message}`));
+            return [];
+        }
+    }
+
+    async ensureConnection() {
+        if (!this.isConnected || !this.pool) {
+            console.log(chalk.yellow('⚠️ Database tidak terkoneksi, mencoba reconnect...'));
+            return await this.connect();
+        }
+
+        // Test connection
+        try {
+            const client = await this.pool.connect();
+            client.release();
+            return true;
+        } catch (error) {
+            console.log(chalk.red(`❌ Database connection test failed: ${error.message}`));
             this.isConnected = false;
-            console.log(chalk.blue('🔌 Koneksi database ditutup'));
+            return await this.connect();
         }
     }
 }

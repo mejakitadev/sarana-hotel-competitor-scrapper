@@ -109,59 +109,44 @@ class DatabaseSetup {
     }
 
     async createTables(client) {
-        // Create main table
-        const createMainTableSQL = `
-            CREATE TABLE IF NOT EXISTS hotel_scraping_results (
-                id SERIAL PRIMARY KEY,
-                search_key VARCHAR(255) NOT NULL,
-                hotel_name VARCHAR(255) NOT NULL,
-                room_price DECIMAL(10,2),
-                price_currency VARCHAR(10) DEFAULT 'IDR',
-                search_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                screenshot_path VARCHAR(500),
-                status VARCHAR(50) DEFAULT 'success',
-                error_message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `;
-
-        await client.query(createMainTableSQL);
-        console.log(chalk.green('✅ Table hotel_scraping_results created'));
-
-
-
-        // Create hotel_data table
+        // Create hotel_data table first (parent table)
         const createHotelDataTableSQL = `
             CREATE TABLE IF NOT EXISTS hotel_data (
-                hotel_id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 hotel_name VARCHAR(255) NOT NULL,
                 rate_harga DECIMAL(10,2) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                
-                -- Foreign key constraint ke hotel_scraping_results
-                CONSTRAINT fk_hotel_id 
-                    FOREIGN KEY (hotel_id) 
-                    REFERENCES hotel_scraping_results(id) 
-                    ON DELETE CASCADE
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `;
 
         await client.query(createHotelDataTableSQL);
         console.log(chalk.green('✅ Table hotel_data created'));
 
-        // Create indexes for main table
-        const indexSQL = `
-            CREATE INDEX IF NOT EXISTS idx_search_key ON hotel_scraping_results(search_key);
-            CREATE INDEX IF NOT EXISTS idx_hotel_name ON hotel_scraping_results(hotel_name);
-            CREATE INDEX IF NOT EXISTS idx_search_timestamp ON hotel_scraping_results(search_timestamp);
-            CREATE INDEX IF NOT EXISTS idx_status ON hotel_scraping_results(status);
+        // Create hotel_scraping_results_log table (child table with foreign key)
+        const createScrapingLogTableSQL = `
+            CREATE TABLE IF NOT EXISTS hotel_scraping_results_log (
+                id SERIAL PRIMARY KEY,
+                hotel_id INTEGER NOT NULL,
+                search_key VARCHAR(255) NOT NULL,
+                room_price DECIMAL(10,2),
+                price_currency VARCHAR(10) DEFAULT 'IDR',
+                search_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                screenshot_path VARCHAR(500),
+                status VARCHAR(50) DEFAULT 'success',
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                
+                -- Foreign key constraint ke hotel_data
+                CONSTRAINT fk_hotel_id 
+                    FOREIGN KEY (hotel_id) 
+                    REFERENCES hotel_data(id) 
+                    ON DELETE CASCADE
+            );
         `;
 
-        await client.query(indexSQL);
-        console.log(chalk.green('✅ Indexes for hotel_scraping_results created'));
-
-
+        await client.query(createScrapingLogTableSQL);
+        console.log(chalk.green('✅ Table hotel_scraping_results_log created'));
 
         // Create indexes for hotel_data table
         const hotelDataIndexSQL = `
@@ -172,6 +157,17 @@ class DatabaseSetup {
 
         await client.query(hotelDataIndexSQL);
         console.log(chalk.green('✅ Indexes for hotel_data created'));
+
+        // Create indexes for hotel_scraping_results_log table
+        const scrapingLogIndexSQL = `
+            CREATE INDEX IF NOT EXISTS idx_scraping_log_hotel_id ON hotel_scraping_results_log(hotel_id);
+            CREATE INDEX IF NOT EXISTS idx_scraping_log_search_key ON hotel_scraping_results_log(search_key);
+            CREATE INDEX IF NOT EXISTS idx_scraping_log_search_timestamp ON hotel_scraping_results_log(search_timestamp);
+            CREATE INDEX IF NOT EXISTS idx_scraping_log_status ON hotel_scraping_results_log(status);
+        `;
+
+        await client.query(scrapingLogIndexSQL);
+        console.log(chalk.green('✅ Indexes for hotel_scraping_results_log created'));
     }
 
     async insertSampleData(client) {

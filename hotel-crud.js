@@ -81,37 +81,26 @@ class HotelCRUD {
 
         // Generate search_key jika tidak diisi
         const finalSearchKey = searchKey || hotelName;
-        const defaultPrice = 0; // Harga default 0
+        const defaultPrice = 0; // Harga default 0 (akan di-update saat scraping)
 
         try {
-            // Insert ke hotel_scraping_results
-            const insertQuery = `
-                INSERT INTO hotel_scraping_results 
-                (search_key, hotel_name, room_price, status, error_message)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-            `;
-
-            const values = [finalSearchKey, hotelName, defaultPrice, 'pending', 'Hotel ditambahkan manual'];
-            const result = await this.db.pool.query(insertQuery, values);
-            const scrapingId = result.rows[0].id;
-
-            // Insert ke hotel_data
-            const insertHotelDataQuery = `
+            // Insert ke hotel_data (parent table) dengan harga kosong
+            const insertHotelQuery = `
                 INSERT INTO hotel_data 
-                (hotel_id, hotel_name, rate_harga)
-                VALUES ($1, $2, $3)
-                RETURNING hotel_id
+                (hotel_name, rate_harga)
+                VALUES ($1, $2)
+                RETURNING id, hotel_name, rate_harga
             `;
 
-            const hotelDataValues = [scrapingId, hotelName, defaultPrice];
-            const hotelDataResult = await this.db.pool.query(insertHotelDataQuery, hotelDataValues);
+            const hotelValues = [hotelName, defaultPrice];
+            const hotelResult = await this.db.pool.query(insertHotelQuery, hotelValues);
+            const hotelId = hotelResult.rows[0].id;
 
             console.log(chalk.green('✅ Hotel berhasil ditambahkan!'));
-            console.log(chalk.cyan(`   🆔 Scraping ID: ${scrapingId}`));
-            console.log(chalk.cyan(`   🏨 Hotel Data ID: ${hotelDataResult.rows[0].hotel_id}`));
+            console.log(chalk.cyan(`   🏨 Hotel ID: ${hotelId}`));
             console.log(chalk.cyan(`   🔍 Search Key: ${finalSearchKey}`));
-            console.log(chalk.cyan(`   💰 Harga Default: Rp 0`));
+            console.log(chalk.cyan(`   💰 Harga Default: Rp 0 (akan di-update saat scraping)`));
+            console.log(chalk.blue(`   📝 Hotel akan di-scrape pada cron job berikutnya`));
 
         } catch (error) {
             console.log(chalk.red(`❌ Gagal menambahkan hotel: ${error.message}`));
@@ -154,32 +143,24 @@ class HotelCRUD {
         const newPrice = await this.question(`Harga Baru (Rp ${selectedHotel.rate_harga.toLocaleString('id-ID')}): `);
 
         try {
-            // Update hotel_scraping_results
-            const updateQuery = `
-                UPDATE hotel_scraping_results 
-                SET hotel_name = $1, search_key = $2, room_price = $3, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $4
-            `;
-
             const finalHotelName = newHotelName || selectedHotel.hotel_name;
             const finalSearchKey = newSearchKey || selectedHotel.search_key;
             const finalPrice = newPrice ? parseFloat(newPrice) : selectedHotel.rate_harga;
 
-            await this.db.pool.query(updateQuery, [finalHotelName, finalSearchKey, finalPrice, selectedHotel.hotel_id]);
-
-            // Update hotel_data
-            const updateHotelDataQuery = `
+            // Update hotel_data (parent table) saja
+            const updateHotelQuery = `
                 UPDATE hotel_data 
                 SET hotel_name = $1, rate_harga = $2, updated_at = CURRENT_TIMESTAMP
-                WHERE hotel_id = $3
+                WHERE id = $3
             `;
 
-            await this.db.pool.query(updateHotelDataQuery, [finalHotelName, finalPrice, selectedHotel.hotel_id]);
+            await this.db.pool.query(updateHotelQuery, [finalHotelName, finalPrice, selectedHotel.id]);
 
             console.log(chalk.green('✅ Hotel berhasil diupdate!'));
             console.log(chalk.cyan(`   🏨 Nama: ${finalHotelName}`));
             console.log(chalk.cyan(`   🔍 Search Key: ${finalSearchKey}`));
             console.log(chalk.cyan(`   💰 Harga: Rp ${finalPrice.toLocaleString('id-ID')}`));
+            console.log(chalk.blue(`   📝 Perubahan akan di-scrape pada cron job berikutnya`));
 
         } catch (error) {
             console.log(chalk.red(`❌ Gagal mengupdate hotel: ${error.message}`));
@@ -219,9 +200,9 @@ class HotelCRUD {
 
         if (confirm.toLowerCase() === 'y' || confirm.toLowerCase() === 'yes') {
             try {
-                // Hapus dari hotel_data (akan cascade ke hotel_scraping_results)
-                const deleteQuery = `DELETE FROM hotel_data WHERE hotel_id = $1`;
-                await this.db.pool.query(deleteQuery, [selectedHotel.hotel_id]);
+                // Hapus dari hotel_data (akan cascade ke hotel_scraping_results_log)
+                const deleteQuery = `DELETE FROM hotel_data WHERE id = $1`;
+                await this.db.pool.query(deleteQuery, [selectedHotel.id]);
 
                 console.log(chalk.green(`✅ Hotel "${selectedHotel.hotel_name}" berhasil dihapus!`));
             } catch (error) {

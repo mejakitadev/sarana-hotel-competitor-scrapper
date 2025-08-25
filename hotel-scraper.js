@@ -580,8 +580,9 @@ class HotelScraper {
             await this.page.waitForTimeout(3000);
 
             // Debug: Screenshot sebelum search
-            await this.page.screenshot({ path: 'before-search.png', fullPage: false });
-            this.log('📸 Screenshot sebelum search: before-search.png', 'info');
+            // Screenshot sebelum search (dihapus untuk efisiensi)
+            // await this.page.screenshot({ path: 'before-search.png', fullPage: false });
+            // this.log('📸 Screenshot sebelum search: before-search.png', 'info');
 
             // Method 1: Cari input field dengan selector yang lebih spesifik untuk Traveloka
             let inputField = await this.page.$('input[placeholder*="hotel"], input[placeholder*="kota"], input[placeholder*="Hotel"], input[placeholder*="Kota"]');
@@ -655,8 +656,9 @@ class HotelScraper {
             await this.page.waitForTimeout(3000);
 
             // Debug: Screenshot setelah ketik
-            await this.page.screenshot({ path: 'after-typing.png', fullPage: false });
-            this.log('📸 Screenshot setelah ketik: after-typing.png', 'info');
+            // Screenshot setelah ketik (dihapus untuk efisiensi)
+            // await this.page.screenshot({ path: 'after-typing.png', fullPage: false });
+            // this.log('📸 Screenshot setelah ketik: after-typing.png', 'info');
 
             // Cari dan klik recommendation yang sesuai untuk menutup dropdown
             this.log('🔍 Mencari recommendation yang sesuai...', 'info');
@@ -813,8 +815,9 @@ class HotelScraper {
             }
 
             // Screenshot setelah dropdown ditutup
-            await this.page.screenshot({ path: 'dropdown-closed.png', fullPage: false });
-            this.log('📸 Screenshot setelah dropdown ditutup: dropdown-closed.png', 'info');
+            // Screenshot setelah dropdown ditutup (dihapus untuk efisiensi)
+            // await this.page.screenshot({ path: 'dropdown-closed.png', fullPage: false });
+            // this.log('📸 Screenshot setelah dropdown ditutup: dropdown-closed.png', 'info');
 
             // Sekarang cari dan klik tombol cari yang sudah terlihat
             this.log('🔍 Mencari tombol cari setelah dropdown ditutup...', 'info');
@@ -863,10 +866,10 @@ class HotelScraper {
                     // PERBAIKAN: Screenshot dengan timeout yang lebih pendek atau skip jika gagal
                     try {
                         await searchButton.screenshot({
-                            path: 'search-button-found.png',
+                            // path: 'search-button-found.png', // Screenshot dihapus untuk efisiensi
                             timeout: 10000 // Timeout lebih pendek untuk screenshot
                         });
-                        this.log('📸 Screenshot tombol cari: search-button-found.png', 'info');
+                        // this.log('📸 Screenshot tombol cari: search-button-found.png', 'info');
                     } catch (screenshotError) {
                         this.log(`⚠️ Screenshot tombol cari gagal, lanjut tanpa screenshot: ${screenshotError.message}`, 'warning');
                     }
@@ -946,8 +949,9 @@ class HotelScraper {
             await this.page.waitForTimeout(3000);
 
             // Debug: Screenshot setelah search
-            await this.page.screenshot({ path: 'after-search.png', fullPage: false });
-            this.log('📸 Screenshot setelah search: after-search.png', 'info');
+            // Screenshot setelah search (dihapus untuk efisiensi)
+            // await this.page.screenshot({ path: 'after-search.png', fullPage: false });
+            // this.log('📸 Screenshot setelah search: after-search.png', 'info');
 
             return true;
 
@@ -1037,139 +1041,101 @@ class HotelScraper {
         }
     }
 
-    async scrapeHotel(searchHotelName) {
+    async scrapeHotel(hotelId, hotelName, searchKey) {
+        let scrapingLogId = null;
+
         try {
-            this.log(`🏨 HOTEL SCRAPER - "${searchHotelName}"`, 'info');
-            this.log('==================================================', 'info');
+            this.log(`🏨 HOTEL SCRAPER - "${hotelName}"`, 'blue');
+            this.log('='.repeat(50), 'blue');
 
-            // Initialize browser
-            if (!await this.initialize()) {
-                throw new Error('Gagal initialize browser');
-            }
-
-            // Buka halaman Traveloka
-            if (!await this.openTravelokaPage()) {
-                throw new Error('Gagal buka halaman Traveloka');
-            }
-
-            this.log('🔍 Mulai search hotel secara otomatis...', 'info');
-
-            // Auto-fill form pencarian
-            if (!await this.searchHotel(searchHotelName)) {
-                throw new Error('Gagal search hotel');
-            }
-
-            // Wait for search results to appear
-            this.log('⏳ Menunggu hasil search muncul...', 'info');
-
-            try {
-                // Wait for hotel names to appear
-                await this.page.waitForSelector('[data-testid*="hotel-name"], [data-testid*="hotel"], [class*="hotel-name"], [class*="hotel"]', { timeout: 15000 });
-                this.log('✅ Hotel names found with data-testid', 'success');
-
-                // FIRST: Dismiss overlays that might be covering the results
-                this.log('🔒 Pertama, dismiss overlay dan modal yang menutupi hasil search...', 'info');
-                await this.dismissOverlaysAndModals();
-
-                // Take screenshot after dismissing overlays
-                try {
-                    await this.page.screenshot({ path: 'after-dismiss-overlay.png' });
-                    this.log(' Screenshot setelah dismiss overlay: after-dismiss-overlay.png', 'info');
-                } catch (screenshotError) {
-                    this.log(`⚠️ Failed to take screenshot: ${screenshotError.message}`, 'warning');
+            // Step 1: Start scraping log dengan status in_progress
+            if (this.db && this.db.isConnected) {
+                scrapingLogId = await this.db.startScrapingLog(hotelId, hotelName, searchKey);
+                if (!scrapingLogId) {
+                    throw new Error('Gagal membuat log scraping');
                 }
+            }
 
-                // SECOND: AFTER OVERLAY DISMISSED: Check for popup and dismiss it
-                this.log('🔒 Kedua, setelah overlay hilang, cek apakah ada popup...', 'info');
-                await this.dismissLoginPopup();
 
-                // THIRD: Extract hotel data from search results (tidak perlu ke detail page)
-                this.log('🔍 Ketiga, extract data hotel dari search results...', 'info');
+            // Step 2: Mulai scraping
+            this.log('🚀 Memulai browser Firefox untuk Hotel Scraper...', 'blue');
+            await this.initialize();
 
-                // Extract hotel data from search results
-                this.log('🔍 Mulai extract data hotel dari search results...', 'info');
-                const hotelData = await this.extractHotelData(searchHotelName);
+            this.log('🌐 Membuka halaman Traveloka Hotel...', 'blue');
+            await this.openTravelokaPage();
 
-                if (hotelData) {
-                    this.log('✅ Data hotel berhasil di-extract:', 'success');
-                    this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
-                    this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
+            this.log('🔍 Mulai search hotel secara otomatis...', 'blue');
+            this.log(`🔍 Mencari hotel: "${searchKey}"...`, 'blue');
 
-                    // Data sudah otomatis tersimpan di extractHotelData(), tidak perlu save lagi di sini
-                    this.log('💾 Data hotel sudah otomatis tersimpan ke database', 'success');
+            // Search hotel
+            await this.searchHotel(searchKey);
 
-                    // Take screenshot of search results
+            // Extract data hotel
+            this.log('🔍 Mulai extract data hotel dari search results...', 'blue');
+            const hotelData = await this.extractHotelData(searchKey);
+
+            if (hotelData && hotelData.name && hotelData.roomPrice !== 'Tidak tersedia') {
+                // Step 3: Update log scraping menjadi success
+                if (scrapingLogId && this.db && this.db.isConnected) {
                     try {
-                        await this.page.screenshot({ path: 'hotel-search-results.png' });
-                        this.log('📸 Screenshot disimpan: hotel-search-results.png', 'info');
-                    } catch (screenshotError) {
-                        this.log(`⚠️ Failed to take search results screenshot: ${screenshotError.message}`, 'warning');
+                        // Extract angka dari harga (hapus "Rp" dan spasi)
+                        const priceNumber = hotelData.roomPrice.replace(/[^\d]/g, '');
+
+                        if (priceNumber && priceNumber.length > 0) {
+                            const price = parseFloat(priceNumber);
+                            const screenshotPath = 'hotel-search-results.png';
+
+                            // Update log scraping menjadi success
+                            await this.db.updateScrapingLogSuccess(scrapingLogId, price, screenshotPath);
+
+                            // Update harga di hotel_data
+                            await this.db.updateHotelDataPrice(hotelId, price);
+
+                            this.log('✅ Data hotel berhasil di-scrape dan disimpan', 'success');
+                            this.log(`   💰 Harga: ${hotelData.roomPrice}`, 'cyan');
+                            this.log(`   📍 Lokasi: ${hotelData.location || 'Tidak tersedia'}`, 'cyan');
+                            this.log(`   ⭐ Rating: ${hotelData.rating || 'Tidak tersedia'}`, 'cyan');
+                        } else {
+                            throw new Error('Harga tidak valid');
+                        }
+                    } catch (error) {
+                        this.log(`❌ Error saat menyimpan data: ${error.message}`, 'error');
+                        // Update log menjadi error
+                        if (scrapingLogId) {
+                            await this.db.updateScrapingLogError(scrapingLogId, `Error saat menyimpan data: ${error.message}`);
+                        }
+                        throw error;
                     }
-
-                    // Extract hotel location
-                    this.log('📍 Extracting hotel location...', 'info');
-                    const location = await this.extractHotelLocation();
-                    if (location) {
-                        this.log(`📍 Lokasi hotel: ${location}`, 'cyan');
-                    }
-
-                    this.log('🎉 SCRAPING BERHASIL! Data hotel berhasil di-extract dari search results', 'success');
-                    this.log('💡 Anda bisa lihat hasil di screenshot: hotel-search-results.png', 'info');
-
-                    // Wait before closing browser
-                    this.log('⏳ Menunggu 5 detik sebelum tutup browser...', 'info');
-                    await this.page.waitForTimeout(5000);
-
-                    return {
-                        success: true,
-                        hotelName: hotelData.name,
-                        price: hotelData.roomPrice,
-                        location: location,
-                        message: 'Hotel data extracted from search results'
-                    };
-
-                } else {
-                    this.log('❌ Tidak ada data hotel yang ditemukan di search results', 'error');
-                    return {
-                        success: false,
-                        message: 'No hotel data found in search results'
-                    };
                 }
-
-            } catch (error) {
-                this.log(`⚠️ Error waiting for search results: ${error.message}`, 'warning');
-
-                // Fallback: try to extract basic hotel data
-                const hotelData = await this.extractHotelData(searchHotelName);
-                if (hotelData) {
-                    this.log('📋 Fallback: Menggunakan data hotel basic', 'info');
-                    this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
-                    this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
-
-                    // Data sudah otomatis tersimpan di extractHotelData(), tidak perlu simpan lagi
-                    this.log('💾 Data hotel sudah otomatis tersimpan ke database', 'success');
-
-                    // Give user time to see results before closing
-                    this.log('⏳ Menunggu 5 detik sebelum tutup browser...', 'info');
-                    this.log('💡 Anda bisa lihat hasil di screenshot: hotel-search-results.png', 'info');
-                    this.log('⏰ Browser akan tutup otomatis dalam 5 detik...', 'info');
-                    await this.page.waitForTimeout(5000); // 5 detik
-
-                    return {
-                        hotelName: searchHotelName,
-                        rooms: [{
-                            name: hotelData.name,
-                            price: hotelData.roomPrice,
-                            source: 'fallback'
-                        }],
-                        success: true
-                    };
+            } else {
+                // Data tidak valid, update log menjadi error
+                const errorMsg = 'Data hotel tidak valid atau tidak ditemukan';
+                if (scrapingLogId && this.db && this.db.isConnected) {
+                    await this.db.updateScrapingLogError(scrapingLogId, errorMsg);
                 }
+                throw new Error(errorMsg);
             }
+
+            return hotelData;
 
         } catch (error) {
             this.log(`❌ Error fatal dalam scraping: ${error.message}`, 'error');
+
+            // Step 4: Update log scraping menjadi error
+            if (scrapingLogId && this.db && this.db.isConnected) {
+                try {
+                    await this.db.updateScrapingLogError(scrapingLogId, error.message);
+                } catch (logError) {
+                    this.log(`❌ Error saat update log error: ${logError.message}`, 'error');
+                }
+            }
+
             return null;
+        } finally {
+            // Cleanup browser
+            if (this.browser) {
+                await this.cleanup();
+            }
         }
     }
 
@@ -1195,8 +1161,9 @@ class HotelScraper {
 
             // Take screenshot of popup for debugging
             try {
-                await this.page.screenshot({ path: 'popup-appeared.png' });
-                this.log('📸 Screenshot popup: popup-appeared.png', 'info');
+                // Screenshot popup (dihapus untuk efisiensi)
+                // await this.page.screenshot({ path: 'popup-appeared.png' });
+                // this.log('📸 Screenshot popup: popup-appeared.png', 'info');
             } catch (screenshotError) {
                 this.log(`⚠️ Failed to take popup screenshot: ${screenshotError.message}`, 'warning');
             }

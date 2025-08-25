@@ -1,3 +1,4 @@
+require('dotenv').config();
 const cron = require('node-cron');
 const chalk = require('chalk');
 const HotelScraper = require('./hotel-scraper');
@@ -9,14 +10,26 @@ class HotelPriceScheduler {
     }
 
     async startScheduler() {
-        console.log(chalk.blue('⏰ Memulai scheduler untuk mengecek harga hotel setiap 3 jam...'));
-        console.log(chalk.blue('📅 Scheduler akan berjalan setiap 3 jam (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00)'));
+        // Ambil konfigurasi langsung dari .env
+        const interval = parseInt(process.env.SCHEDULER_INTERVAL);
+        const cronExpression = process.env.SCHEDULER_CRON;
+        const timezone = process.env.SCHEDULER_TIMEZONE;
+
+        // Validasi konfigurasi
+        if (!interval || !cronExpression || !timezone) {
+            throw new Error('Konfigurasi SCHEDULER_INTERVAL, SCHEDULER_CRON, dan SCHEDULER_TIMEZONE harus ada di file .env');
+        }
+
+        console.log(chalk.blue(`⏰ Memulai scheduler untuk mengecek harga hotel setiap ${interval} jam...`));
+        console.log(chalk.blue(`📅 Scheduler akan berjalan setiap ${interval} jam`));
+        console.log(chalk.blue(`🔄 Cron Expression: ${cronExpression}`));
+        console.log(chalk.blue(`🌍 Timezone: ${timezone}`));
 
         // Jalankan scraping pertama kali
         await this.runScraping();
 
-        // Set cron job untuk setiap 3 jam
-        cron.schedule('0 */3 * * *', async () => {
+        // Set cron job berdasarkan konfigurasi
+        cron.schedule(cronExpression, async () => {
             if (!this.isRunning) {
                 await this.runScraping();
             } else {
@@ -24,14 +37,14 @@ class HotelPriceScheduler {
             }
         }, {
             scheduled: true,
-            timezone: "Asia/Jakarta"
+            timezone: timezone
         });
 
         console.log(chalk.green('✅ Scheduler berhasil dimulai!'));
         console.log(chalk.blue('💡 Tekan Ctrl+C untuk menghentikan scheduler'));
 
-        // Jalankan scraping manual setiap 3 jam untuk testing
-        this.startManualScheduler();
+        // Jalankan scraping manual setiap interval untuk testing
+        this.startManualScheduler(interval);
     }
 
     async runScraping() {
@@ -73,8 +86,9 @@ class HotelPriceScheduler {
 
                 // Jeda antar kota
                 if (city !== cities[cities.length - 1]) {
-                    console.log(chalk.blue('\n⏳ Menunggu 3 detik sebelum kota berikutnya...'));
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    const delayCities = parseInt(process.env.DELAY_BETWEEN_CITIES);
+                    console.log(chalk.blue(`\n⏳ Menunggu ${delayCities} detik sebelum kota berikutnya...`));
+                    await new Promise(resolve => setTimeout(resolve, delayCities * 1000));
                 }
             }
 
@@ -150,14 +164,16 @@ class HotelPriceScheduler {
         }
     }
 
-    startManualScheduler() {
-        // Untuk testing, jalankan scraping setiap 3 jam secara manual
+    startManualScheduler(interval) {
+        const intervalMs = interval * 60 * 60 * 1000;
+
+        // Untuk testing, jalankan scraping setiap interval secara manual
         setInterval(async () => {
             if (!this.isRunning) {
-                console.log(chalk.blue('\n⏰ 3 jam telah berlalu, memulai scraping otomatis...'));
+                console.log(chalk.blue(`\n⏰ ${interval} jam telah berlalu, memulai scraping otomatis...`));
                 await this.runScraping();
             }
-        }, 3 * 60 * 60 * 1000); // 3 jam dalam milidetik
+        }, intervalMs);
     }
 
     stopScheduler() {

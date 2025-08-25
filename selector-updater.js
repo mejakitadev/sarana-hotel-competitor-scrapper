@@ -44,8 +44,9 @@ class SelectorUpdater {
             await this.page.waitForTimeout(2000);
 
             // Screenshot untuk analisis
-            await this.page.screenshot({ path: 'selector-analysis.png', fullPage: false });
-            console.log(chalk.blue('📸 Screenshot disimpan: selector-analysis.png'));
+            // Screenshot selector analysis (dihapus untuk efisiensi)
+            // await this.page.screenshot({ path: 'selector-analysis.png', fullPage: false });
+            // console.log(chalk.blue('📸 Screenshot disimpan: selector-analysis.png'));
 
             // Deteksi semua button yang mungkin
             const allButtons = await this.page.$$('button, [role="button"], input[type="submit"]');
