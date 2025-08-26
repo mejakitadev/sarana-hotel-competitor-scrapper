@@ -24,17 +24,18 @@
 FROM node:20-slim
 
 # Set working directory
-WORKDIR /app
+RUN mkdir -p /usr/src/app
+WORKDIR /usr/src/app
 
 # Install dependencies first (caching layer)
-COPY package*.json ./
+COPY package*.json /usr/src/app/
 RUN npm install --omit=dev
 
 # Install only Firefox + system dependencies
 RUN npx playwright install --with-deps firefox
 
 # Copy source code
-COPY . .
+COPY . /usr/src/app
 
 # Make the start script executable
 RUN chmod +x start-server.sh

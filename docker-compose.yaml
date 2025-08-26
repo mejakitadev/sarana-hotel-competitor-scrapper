@@ -9,4 +9,4 @@ services:
     restart: unless-stopped
     command: ["./start-server.sh"]
     volumes:
-      - .:/app
+      - .:/usr/src/app
