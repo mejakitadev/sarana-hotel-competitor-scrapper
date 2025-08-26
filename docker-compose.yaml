@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  scraper:
+    build: .
+    env_file:
+      - .env
+    container_name: traveloka-scraper
+    restart: unless-stopped
+    volumes:
+      - .:/app

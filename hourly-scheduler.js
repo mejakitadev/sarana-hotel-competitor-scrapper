@@ -117,7 +117,10 @@ class HourlyHotelScheduler {
     isWithinActiveTime(startTime, endTime) {
         try {
             const now = new Date();
-            const currentTime = now.toTimeString().slice(0, 5); // Format HH:MM
+            // Format waktu menjadi HH:MM
+            const localCurrentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta' });
+            const currentTime = localCurrentTime.split('.')[0] + ':' + localCurrentTime.split('.')[1]
+            console.log(chalk.blue(`Waktu saat ini: ${currentTime}`));
 
             // Parse waktu dari string
             const [startHour, startMin] = startTime.split(':').map(Number);
