@@ -7,5 +7,6 @@ services:
       - .env
     container_name: traveloka-scraper
     restart: unless-stopped
+    command: ["./start-server.sh"]
     volumes:
       - .:/app
