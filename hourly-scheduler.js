@@ -224,8 +224,9 @@ class HourlyHotelScheduler {
                     try {
                         // Buat instance scraper baru untuk setiap hotel
                         this.scraper = new HotelScraper();
-                        this.scraper.db = this.db; // Pass database reference
-                        // initialize() akan dipanggil otomatis di dalam scrapeHotel()
+                        this.scraper.db = this.db; // Pass database reference yang sama
+                        // Pastikan database connection tidak ditutup di scraper
+                        this.scraper.dbConnectionShared = true; // Flag untuk mencegah close database
 
                         // Scrape hotel dengan flow baru
                         const hotelData = await this.scraper.scrapeHotel(
@@ -252,8 +253,8 @@ class HourlyHotelScheduler {
                             this.currentRun.failedScrapes++;
                         }
 
-                        // Cleanup scraper
-                        await this.scraper.cleanup();
+                        // Cleanup scraper (tidak tutup database connection)
+                        await this.scraper.cleanup(false);
                         this.scraper = null;
 
                         // Jeda antar hotel (kecuali hotel terakhir)
@@ -266,9 +267,9 @@ class HourlyHotelScheduler {
                         console.error(chalk.red(`❌ Error fatal saat scraping ${hotel.name}:`), error.message);
                         console.error(chalk.red(`Stack trace:`), error.stack);
 
-                        // Cleanup scraper
+                        // Cleanup scraper (tidak tutup database connection)
                         if (this.scraper) {
-                            await this.scraper.cleanup();
+                            await this.scraper.cleanup(false);
                             this.scraper = null;
                         }
 
@@ -312,10 +313,10 @@ class HourlyHotelScheduler {
             // Reset running state
             this.isRunning = false;
 
-            // Try to cleanup scraper if exists
+            // Try to cleanup scraper if exists (tidak tutup database connection)
             if (this.scraper) {
                 try {
-                    await this.scraper.cleanup();
+                    await this.scraper.cleanup(false);
                 } catch (cleanupError) {
                     console.error(chalk.red('❌ Error saat cleanup scraper:'), cleanupError.message);
                 }
