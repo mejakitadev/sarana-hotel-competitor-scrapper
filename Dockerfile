@@ -21,7 +21,7 @@
 # # Copy semua source code (tanpa node_modules lokal)
 # COPY . .
 
-FROM node:20-slim
+FROM mcr.microsoft.com/playwright:v1.55.0-noble
 
 # Set working directory
 WORKDIR /app
@@ -30,11 +30,15 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
-# Install only Firefox + system dependencies
-RUN npx playwright install --with-deps firefox
-
 # Copy source code
 COPY . .
+
+# Set necessary environment variables for running browsers in containers
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Configure Playwright to run in non-headless mode with additional args
+ENV PLAYWRIGHT_LAUNCH_OPTIONS='{"headless": true, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}'
 
 # Jalankan aplikasi
 CMD ["node", "hourly-scheduler.js"]
