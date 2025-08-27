@@ -4,7 +4,7 @@ const chalk = require('chalk');
 // Load environment variables
 require('dotenv').config();
 
-const { getDbConfig } = require('./db-config');
+const { getDbConfig } = require('../../config/db-config');
 
 class DatabaseManager {
     constructor() {
@@ -519,7 +519,7 @@ class DatabaseManager {
         }
 
         try {
-            // Instead of updating, create a new success log entry
+            // Create new success log entry (selang-seling dengan in_progress)
             const insertQuery = `
                 INSERT INTO hotel_scraping_results_log 
                 (hotel_id, search_key, room_price, screenshot_path, status, search_timestamp)
@@ -585,7 +585,7 @@ class DatabaseManager {
         }
 
         try {
-            // Instead of updating, create a new error log entry
+            // Create new error log entry (selang-seling dengan in_progress)
             const insertQuery = `
                 INSERT INTO hotel_scraping_results_log 
                 (hotel_id, search_key, status, error_message, search_timestamp)
@@ -687,6 +687,111 @@ class DatabaseManager {
             console.log(chalk.red(`❌ Database connection test failed: ${error.message}`));
             this.isConnected = false;
             return await this.connect();
+        }
+    }
+
+    // Method untuk membersihkan data duplikasi (tetap mempertahankan pattern selang-seling)
+    async cleanupDuplicateData() {
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa cleanup data: database tidak terkoneksi'));
+            return false;
+        }
+
+        try {
+            console.log(chalk.yellow('🧹 Memulai cleanup data duplikasi...'));
+
+            // 1. Hapus entry in_progress yang sudah lama (lebih dari 1 jam)
+            const deleteOldInProgressQuery = `
+                DELETE FROM hotel_scraping_results_log 
+                WHERE status = 'in_progress' 
+                AND search_timestamp < NOW() - INTERVAL '1 hour'
+            `;
+            const oldInProgressResult = await this.pool.query(deleteOldInProgressQuery);
+            console.log(chalk.blue(`🗑️ Dihapus ${oldInProgressResult.rowCount} entry in_progress yang lama`));
+
+            // 2. Hapus duplikasi yang tidak perlu (bukan pattern selang-seling yang valid)
+            // Hapus entry success/error yang duplikasi dalam waktu yang sama (dalam 1 menit)
+            const deleteInvalidDuplicatesQuery = `
+                DELETE FROM hotel_scraping_results_log 
+                WHERE id NOT IN (
+                    SELECT DISTINCT ON (hotel_id, search_key, DATE_TRUNC('minute', search_timestamp)) id
+                    FROM hotel_scraping_results_log
+                    WHERE status IN ('success', 'error')
+                    ORDER BY hotel_id, search_key, DATE_TRUNC('minute', search_timestamp), search_timestamp DESC
+                )
+                AND status IN ('success', 'error')
+            `;
+            const duplicatesResult = await this.pool.query(deleteInvalidDuplicatesQuery);
+            console.log(chalk.blue(`🗑️ Dihapus ${duplicatesResult.rowCount} entry duplikasi yang tidak valid`));
+
+            // 3. Update hotel_data dengan harga terbaru dari log yang berhasil
+            const updateHotelDataQuery = `
+                UPDATE hotel_data 
+                SET rate_harga = latest_prices.room_price,
+                    updated_at = CURRENT_TIMESTAMP
+                FROM (
+                    SELECT DISTINCT ON (hotel_id) 
+                        hotel_id, 
+                        room_price
+                    FROM hotel_scraping_results_log
+                    WHERE status = 'success' 
+                        AND room_price IS NOT NULL
+                    ORDER BY hotel_id, search_timestamp DESC
+                ) latest_prices
+                WHERE hotel_data.id = latest_prices.hotel_id
+            `;
+            const updateResult = await this.pool.query(updateHotelDataQuery);
+            console.log(chalk.blue(`🔄 Diupdate ${updateResult.rowCount} harga hotel`));
+
+            // 4. Tampilkan statistik setelah cleanup
+            const statsQuery = `
+                SELECT 
+                    status,
+                    COUNT(*) as count
+                FROM hotel_scraping_results_log
+                GROUP BY status
+                ORDER BY status
+            `;
+            const statsResult = await this.pool.query(statsQuery);
+
+            console.log(chalk.green('📊 Statistik setelah cleanup:'));
+            statsResult.rows.forEach(row => {
+                console.log(chalk.white(`   ${row.status}: ${row.count} entries`));
+            });
+
+            console.log(chalk.green('✅ Cleanup data duplikasi selesai (pattern selang-seling tetap dipertahankan)'));
+            return true;
+
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal cleanup data duplikasi: ${error.message}`));
+            return false;
+        }
+    }
+
+    // Method untuk mendapatkan statistik database
+    async getDatabaseStats() {
+        if (!(await this.ensureConnection())) {
+            console.log(chalk.red('❌ Tidak bisa ambil statistik: database tidak terkoneksi'));
+            return null;
+        }
+
+        try {
+            const statsQuery = `
+                SELECT 
+                    (SELECT COUNT(*) FROM hotel_data) as total_hotels,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'success') as successful_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'error') as failed_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'in_progress') as in_progress_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log) as total_logs,
+                    (SELECT MAX(search_timestamp) FROM hotel_scraping_results_log) as last_scrape_time
+            `;
+
+            const result = await this.pool.query(statsQuery);
+            return result.rows[0];
+
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal ambil statistik database: ${error.message}`));
+            return null;
         }
     }
 }

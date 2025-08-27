@@ -1,6 +1,6 @@
 const chalk = require('chalk');
 const readline = require('readline');
-const DatabaseManager = require('./database');
+const DatabaseManager = require('../utils/database');
 
 class HotelCRUD {
     constructor() {

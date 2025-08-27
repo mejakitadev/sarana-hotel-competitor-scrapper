@@ -4,7 +4,7 @@ const chalk = require('chalk');
 // Load environment variables
 require('dotenv').config();
 
-const DatabaseManager = require('./database');
+const DatabaseManager = require('../utils/database');
 
 class HotelScraper {
     constructor() {
@@ -492,76 +492,16 @@ class HotelScraper {
                 this.log(`   🏨 Nama: ${hotelData.name}`, 'cyan');
                 this.log(`   💰 Harga Kamar: ${hotelData.roomPrice}`, 'cyan');
 
-                // Simpan hasil ke database hanya jika data valid
-                if (this.db.isConnected && hotelData.name && hotelData.roomPrice !== 'Tidak tersedia') {
-                    try {
-                        // Extract angka dari harga (hapus "Rp" dan spasi)
-                        const priceNumber = hotelData.roomPrice.replace(/[^\d]/g, '');
-
-                        // Validasi harga
-                        if (priceNumber && priceNumber.length > 0) {
-                            const screenshotPath = 'hotel-search-results.png';
-
-                            // Cek apakah hotel sudah ada di database
-                            const existingHotel = await this.db.getHotelByName(hotelData.name);
-
-                            if (existingHotel) {
-                                // Update hanya harga jika hotel sudah ada
-                                await this.db.updateHotelPrice(
-                                    existingHotel.id,
-                                    parseFloat(priceNumber),
-                                    screenshotPath
-                                );
-                                this.log('✅ Harga hotel berhasil di-update di database', 'success');
-                            } else {
-                                // Insert baru jika hotel belum ada
-                                await this.db.saveScrapingResult(
-                                    searchHotelName,
-                                    hotelData.name,
-                                    parseFloat(priceNumber),
-                                    screenshotPath,
-                                    'success'
-                                );
-                                this.log('✅ Data hotel baru berhasil disimpan ke database', 'success');
-                            }
-                        } else {
-                            // Jika harga tidak valid, simpan dengan status failed
-                            await this.db.saveScrapingResult(
-                                searchHotelName,
-                                hotelData.name,
-                                null,
-                                null,
-                                'failed',
-                                'Harga tidak valid'
-                            );
-                            this.log('⚠️ Harga tidak valid, data disimpan dengan status failed', 'warning');
-                        }
-                    } catch (dbError) {
-                        this.log(`⚠️ Gagal menyimpan ke database: ${dbError.message}`, 'warning');
-                    }
-                } else {
-                    this.log('⚠️ Data tidak valid atau database tidak tersedia, tidak disimpan', 'warning');
-                }
+                // Data hotel sudah disimpan melalui flow baru di scrapeHotel()
+                // Tidak perlu menyimpan lagi di sini untuk menghindari duplikasi
+                this.log('✅ Data hotel berhasil di-extract dan akan disimpan melalui flow baru', 'success');
 
                 return hotelData;
             } else {
                 this.log('⚠️ Tidak ada data hotel yang ditemukan', 'warning');
 
-                // Simpan error ke database
-                if (this.db.isConnected) {
-                    try {
-                        await this.db.saveScrapingResult(
-                            searchHotelName,
-                            'N/A',
-                            null,
-                            null,
-                            'failed',
-                            'Hotel tidak ditemukan'
-                        );
-                    } catch (dbError) {
-                        this.log(`⚠️ Gagal menyimpan error ke database: ${dbError.message}`, 'warning');
-                    }
-                }
+                // Error sudah ditangani melalui flow baru di scrapeHotel()
+                // Tidak perlu menyimpan error lagi di sini untuk menghindari duplikasi
 
                 return null;
             }
@@ -1132,9 +1072,9 @@ class HotelScraper {
 
             return null;
         } finally {
-            // Cleanup browser
+            // Cleanup browser (tidak tutup database connection)
             if (this.browser) {
-                await this.cleanup();
+                await this.cleanup(false);
             }
         }
     }
@@ -1187,7 +1127,7 @@ class HotelScraper {
         }
     }
 
-    async cleanup() {
+    async cleanup(closeDatabase = true) {
         try {
             if (this.page) {
                 await this.page.close();
@@ -1199,9 +1139,13 @@ class HotelScraper {
                 this.log('✅ Browser ditutup', 'success');
             }
 
-            // Tutup koneksi database
-            if (this.db) {
+            // Tutup koneksi database hanya jika diminta dan tidak shared
+            // Untuk scheduler, database connection tidak ditutup agar bisa digunakan untuk hotel berikutnya
+            if (closeDatabase && this.db && !this.dbConnectionShared) {
                 await this.db.close();
+                this.log('✅ Database connection ditutup', 'success');
+            } else if (this.dbConnectionShared) {
+                this.log('✅ Database connection tetap hidup (shared)', 'success');
             }
 
             this.log('✅ Semua resource dibersihkan', 'success');
