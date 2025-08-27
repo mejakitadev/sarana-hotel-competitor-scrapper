@@ -268,11 +268,11 @@ class UserReviewScraper {
                 }).then(async (localStorage) => {
                     // Save cookies to file
                     const fs = require('fs').promises;
-                    await fs.writeFile('tmp/reviewpro-cookies.json', JSON.stringify(cookies, null, 2));
+                    await fs.writeFile('temp/reviewpro-cookies.json', JSON.stringify(cookies, null, 2));
                     this.log('✅ Cookies saved to cookies.json', 'success');
 
                     // Save localStorage to file
-                    await fs.writeFile('tmp/reviewpro-localStorage.json', JSON.stringify(localStorage, null, 2));
+                    await fs.writeFile('temp/reviewpro-localStorage.json', JSON.stringify(localStorage, null, 2));
                     this.log('✅ LocalStorage saved to localStorage.json', 'success');
                 });
             } catch (error) {
@@ -295,7 +295,7 @@ class UserReviewScraper {
 
             // Load cookies from file
             const fs = require('fs').promises;
-            const cookies = await fs.readFile('tmp/reviewpro-cookies.json', 'utf8');
+            const cookies = await fs.readFile('temp/reviewpro-cookies.json', 'utf8');
             const cookiesJson = JSON.parse(cookies);
             
             // Set cookies
