@@ -172,11 +172,6 @@ class UserReviewScraper {
                         const title = await this.page.title();
                         this.log(`📄 Title: ${title}`, 'info');
 
-                        const currentUrl = this.page.url();
-                        if (currentUrl.toLowerCase().includes('login')) {
-                            await this.tryLogin();
-                        }
-
                         break;
                     } else {
                         throw new Error(`HTTP ${response?.status() || 'unknown'}`);
@@ -202,10 +197,15 @@ class UserReviewScraper {
 
     async tryLogin() {
         try {
+            await this.page.goto('https://app.reviewpro.com/login', {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+            });
+
+            await this.page.waitForTimeout(10000);
+
             const username = process.env.USER_REVIEW_LOGIN_USERNAME
             const password = process.env.USER_REVIEW_LOGIN_PASSWORD                
-
-            this.log('🔒 Mencoba login...', 'info');
 
             // If modal cookie policy, click button that contains text "Accept all"
             const modalCookiePolicy = await this.page.$$('button:has-text("Accept all")');
@@ -306,6 +306,7 @@ class UserReviewScraper {
 
         } catch (error) {
             this.log(`❌ Error saat setup cookies: ${error.message}`, 'error');
+            await this.tryLogin();
             return false;
         }
     }
@@ -342,6 +343,13 @@ class UserReviewScraper {
             const responsePromise = this.page.waitForResponse('**/api/reviewpro-data/rest/reviews/_details');
             const response = await responsePromise;
             const data = await response.json();
+
+            const currentUrl = this.page.url();
+            if (currentUrl.toLowerCase().includes('login')) {
+                await this.tryLogin();
+                await this.page.waitForTimeout(10000);
+                return this.getDataReview();
+            }
 
             const reviewItemsService = new ReviewItemsService();
             const insertData = [];
