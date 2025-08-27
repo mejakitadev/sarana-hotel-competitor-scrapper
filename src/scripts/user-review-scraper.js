@@ -4,7 +4,8 @@ const chalk = require('chalk');
 // Load environment variables
 require('dotenv').config();
 
-const DatabaseManager = require('./database');
+const DatabaseManager = require('../utils/database');
+const ReviewItemsService = require('../services/review-items');
 
 class UserReviewScraper {
     constructor() {
@@ -46,7 +47,7 @@ class UserReviewScraper {
 
             // Launch browser dengan timeout protection (menggunakan konfigurasi yang berhasil)
             const browserPromise = firefox.launch({
-                headless: false,
+                headless: true,
                 timeout: 60000,
                 args: ['--no-sandbox', '--disable-setuid-sandbox']
             });
@@ -309,6 +310,31 @@ class UserReviewScraper {
         }
     }
 
+    async gotoNextPage(page) {
+        try {
+            this.log(`🔍 Membuka halaman ${page}`, 'info');
+            
+            // Wait for the next page button to be visible
+            const nextPageButton = await this.page.waitForSelector('button[aria-label="Go to next page"]', {
+                visible: true,
+                timeout: 5000
+            });
+
+            if (!nextPageButton) {
+                this.log('❌ Next page button not found', 'info');
+                return false;
+            }
+
+            // Click the next page button
+            await nextPageButton.click();
+            
+            return true;
+        } catch (error) {
+            this.log(`❌ Error saat gotoNextPage: ${error.message}`, 'error');
+            return false;
+        }
+    }
+
     async getDataReview() {
         try {
             this.log('🔍 Memulai proses getDataReview...', 'info');
@@ -317,27 +343,40 @@ class UserReviewScraper {
             const response = await responsePromise;
             const data = await response.json();
 
-            const insertData = data.map(review => ({
-                api_id: review.id,
-                text: review.text,
-                author: review.author,
-                review_level: review.overallScore.value,
-                max_review_level: review.overallScore.outOf,
-                is_replied: review.replied ? 1 : 0,
-                productInfo: review.productInfo ? review.productInfo.name : "",
-                reply_url: review.replyToUrl,
-                reply_date: review.managementResponses ? (review.managementResponses.length > 0 ? new Date(review.managementResponses[0].date).toISOString().slice(0, 19).replace('T', ' ') : null) : null,
-                reply: review.managementResponses ? (review.managementResponses.length > 0 ? review.managementResponses[0].text : "") : "",
-                reply_author: review.managementResponses ? (review.managementResponses.length > 0 ? review.managementResponses[0].author : "") : "",
-                metadata: JSON.stringify(review)
+            const reviewItemsService = new ReviewItemsService();
+            const insertData = [];
+            await Promise.all(data.map(async review => {
+                const publishedAt = new Date(review.publishedDate)
+                const replyDate = review.managementResponses ? (review.managementResponses.length > 0 ? new Date(review.managementResponses[0].date) : null) : null;
+                // format to YYYY-MM-DD HH:MM:SS
+                const publishedAtFormatted = `${publishedAt.getFullYear()}-${String(publishedAt.getMonth() + 1).padStart(2, '0')}-${String(publishedAt.getDate()).padStart(2, '0')} ${String(publishedAt.getHours()).padStart(2, '0')}:${String(publishedAt.getMinutes()).padStart(2, '0')}:${String(publishedAt.getSeconds()).padStart(2, '0')}`;
+                const replyDateFormatted = replyDate ? `${replyDate.getFullYear()}-${String(replyDate.getMonth() + 1).padStart(2, '0')}-${String(replyDate.getDate()).padStart(2, '0')} ${String(replyDate.getHours()).padStart(2, '0')}:${String(replyDate.getMinutes()).padStart(2, '0')}:${String(replyDate.getSeconds()).padStart(2, '0')}` : null;
+
+                await reviewItemsService.createReviewItemFromScraper({
+                    api_id: review.id,
+                    text: review.text,
+                    username: review.author,
+                    review: review.text,
+                    review_level: review.overallScore ? review.overallScore.value : 0,
+                    max_review_level: review.overallScore ? review.overallScore.outOf : 0,
+                    is_replied: review.replied ? 1 : 0,
+                    ota_platform: review.url ? new URL(review.url).hostname.split('.')[1] : "",
+                    product_name: review.productInfo ? review.productInfo.name : "",
+                    published_at: publishedAtFormatted,
+                    reply_url: review.replyToUrl,
+                    reply_date: replyDateFormatted,
+                    reply: review.managementResponses ? (review.managementResponses.length > 0 ? review.managementResponses[0].text : "") : "",
+                    reply_author: review.managementResponses ? (review.managementResponses.length > 0 ? review.managementResponses[0].author : "") : "",
+                    metadata: JSON.stringify(review)
+                });
             }));
 
-            console.log('<<', insertData);
+            await reviewItemsService.close();
+
+            console.log('<<', JSON.stringify(insertData, null, 2));
             this.log('✅ Berhasil mendapatkan data review', 'success');
 
-            await this.page.waitForTimeout(2000);
-            
-            this.log('✅ Setup API interceptor berhasil', 'success');
+            await this.page.waitForTimeout(2000);            
             return true;
 
         } catch (error) {
@@ -366,13 +405,22 @@ class UserReviewScraper {
 
             this.log('🔍 Memulai proses getDataReview...', 'info'); 
             await this.getDataReview();
+
+            this.log('🔍 Membuka halaman berikutnya', 'info'); 
+            for (let i = 1; i <= 3; i++) {
+                this.log(`🔍 Membuka halaman ${i}`, 'info');
+                await this.gotoNextPage(i);
+                await this.getDataReview();
+                await this.page.waitForTimeout(3000);
+            }
             
             this.log('✅ Proses getDataReview berhasil', 'success');
 
             // Wait for 30 second
-            await this.page.waitForTimeout(30000);
+            this.log('🔍 Sleeping in 3 seconds...', 'info');
+            await this.page.waitForTimeout(3000);
 
-            return {};
+            return true;
 
         } catch (error) {
             this.log(`❌ Error fatal dalam scraping: ${error.message}`, 'error');
@@ -386,7 +434,7 @@ class UserReviewScraper {
                 }
             }
 
-            return null;
+            return false;
         } finally {
             // Cleanup browser
             if (this.browser) {
