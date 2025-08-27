@@ -4,7 +4,7 @@ const chalk = require('chalk');
 // Load environment variables
 require('dotenv').config();
 
-const { getDbConfig } = require('../../db-config');
+const { getDbConfig } = require('../../config/db-config');
 
 class DatabaseManager {
     constructor() {
