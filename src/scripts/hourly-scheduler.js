@@ -2,7 +2,7 @@ require('dotenv').config();
 const cron = require('node-cron');
 const chalk = require('chalk');
 const HotelScraper = require('./hotel-scraper');
-const DatabaseManager = require('./database');
+const DatabaseManager = require('../utils/database');
 
 // Konfigurasi scraping akan diambil dari .env
 // Default values sebagai fallback

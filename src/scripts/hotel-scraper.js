@@ -4,7 +4,7 @@ const chalk = require('chalk');
 // Load environment variables
 require('dotenv').config();
 
-const DatabaseManager = require('./database');
+const DatabaseManager = require('../utils/database');
 
 class HotelScraper {
     constructor() {
