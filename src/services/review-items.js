@@ -40,12 +40,11 @@ class ReviewItemsService {
                     is_replied = $2,
                     reply_date = $3,
                     reply_author = $4,
-                    reply_url = $5,
-                    reply = $6
-                    WHERE api_id = $7
+                    reply = $5,
+                    WHERE api_id = $6
                     RETURNING * 
                 `;
-                const updateResult = await this.pool.query(updateQuery, [metadata, is_replied, reply_date, reply_author, reply_url, reply, api_id]);
+                const updateResult = await this.pool.query(updateQuery, [metadata, is_replied, reply_date, reply_author, reply, api_id]);
                 console.log(chalk.green('✅ Review item updated successfully'));
                 return updateResult.rows[0];
             }
