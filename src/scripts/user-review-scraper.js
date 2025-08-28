@@ -393,6 +393,24 @@ class UserReviewScraper {
         }
     }
 
+    async callApiAnswerUnrepliedReview() {  
+        try{
+            this.log(`🔍 Memanggil API untuk menjawab ulang review tanpa balasan ke AI...`, 'info');
+            const response = await fetch(process.env.PYTHON_API_URL+"user-review/answer-unreplied-review", {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            console.log('DAT', JSON.stringify(data, null, 2));
+            this.log('✅ Berhasil callApiAnswerUnrepliedReview', 'success');
+            return true;
+
+        } catch (error) {
+            this.log(`❌ Error saat callApiAnswerUnrepliedReview: ${error.message}`, 'error');
+            return false;
+        }
+    }
+
     async scrapeUserReview() {
         let scrapingLogId = null;
 
@@ -406,7 +424,12 @@ class UserReviewScraper {
 
             // Setup cookies
             this.log('🔒 Mencoba setup cookies...', 'info');
-            await this.setupCookies();
+            const setupCookieStatus = await this.setupCookies();
+            if (!setupCookieStatus) {
+                this.log('❌ Gagal setup cookies, run in next scheduler...', 'error');
+                return true;
+            }
+
 
             this.log('🌐 Membuka halaman ReviewPro...', 'blue');
             await this.openReviewProPage();
@@ -423,6 +446,9 @@ class UserReviewScraper {
             }
             
             this.log('✅ Proses getDataReview berhasil', 'success');
+
+            // Call API to answer unreplied review
+            await this.callApiAnswerUnrepliedReview();
 
             // Wait for 30 second
             this.log('🔍 Sleeping in 3 seconds...', 'info');
