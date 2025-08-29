@@ -24,6 +24,52 @@ router.get('/', async (req, res) => {
     }
 });
 
+router.get('/daily-rate', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            WITH daily_rates AS (
+                SELECT 
+                    h.hotel_name,
+                    DATE(l.search_timestamp) as date,
+                    AVG(l.room_price) as daily_average_rate
+                FROM hotel_data h
+                JOIN hotel_scraping_results_log l ON h.id = l.hotel_id
+                WHERE 
+                    l.status = 'success' 
+                    AND l.search_timestamp >= CURRENT_DATE - INTERVAL '7 days'
+                GROUP BY 
+                    h.hotel_name,
+                    DATE(l.search_timestamp)
+                ORDER BY 
+                    h.hotel_name,
+                    DATE(l.search_timestamp) DESC
+            )
+            SELECT 
+                hotel_name,
+                json_agg(
+                    json_build_object(
+                        'date', date,
+                        'daily_average_rate', daily_average_rate
+                    )
+                ) as log_rate_data
+            FROM daily_rates
+            GROUP BY hotel_name
+        `);
+
+        res.json({
+            success: true,
+            count: rows.length,
+            data: rows
+        });
+    } catch (error) {
+        console.error('Error fetching hotel rates:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch hotel rates'
+        });
+    }
+});
+
 // Get hotel by ID
 router.get('/:id', async (req, res) => {
     try {
