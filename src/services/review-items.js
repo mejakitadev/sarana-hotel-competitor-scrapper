@@ -40,7 +40,7 @@ class ReviewItemsService {
                     is_replied = $2,
                     reply_date = $3,
                     reply_author = $4,
-                    reply = $5,
+                    reply = $5
                     WHERE api_id = $6
                     RETURNING * 
                 `;
