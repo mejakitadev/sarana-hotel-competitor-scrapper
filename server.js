@@ -28,6 +28,7 @@ app.use('/api/scraping', require('./src/routes/scraping'));
 app.use('/api/hotel-data', require('./src/routes/hotel-data'));
 app.use('/api/hotel-crud', require('./src/routes/hotel-crud'));
 app.use('/api/hotel-hourly-data', require('./src/routes/hotel-hourly-data'));
+app.use('/api/user-review-analytics', require('./src/routes/user-review-analytics'));
 
 // Health check endpoint (enhanced)
 app.get('/health', (req, res) => {
@@ -43,6 +44,7 @@ app.get('/health', (req, res) => {
             hotelData: '/api/hotel-data',
             hotelCrud: '/api/hotel-crud',
             hotelHourlyData: '/api/hotel-hourly-data',
+            userReviewAnalytics: '/api/user-review-analytics',
             swagger: '/api-docs'
         }
     });
