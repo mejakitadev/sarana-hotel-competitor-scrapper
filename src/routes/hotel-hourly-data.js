@@ -54,12 +54,10 @@ router.get('/today', async (req, res) => {
 
         // Group data by hotel and hour
         const hotelHourlyData = {};
-        const timeSlots = [];
 
-        // Initialize time slots (00:00 to current hour) - Convert to WIB
-        const wibToday = new Date(today.getTime() + (7 * 60 * 60 * 1000)); // Convert to WIB
-        const currentHour = wibToday.getHours();
-        for (let hour = 0; hour <= currentHour; hour++) {
+        // Initialize time slots (00:00 to 23:00) - Full 24 hours
+        const timeSlots = [];
+        for (let hour = 0; hour <= 23; hour++) {
             timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
         }
 

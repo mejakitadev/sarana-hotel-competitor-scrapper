@@ -8,8 +8,8 @@ const DatabaseManager = require('../utils/database');
 // Default values sebagai fallback
 const defaultConfig = {
     intervalHours: 1,
-    startTime: '06:00',
-    endTime: '23:00',
+    startTime: '00:00',
+    endTime: '23:59',
     delayBetweenHotels: 30,
     delayBetweenCities: 60
 };

@@ -62,8 +62,8 @@ const scrapingConfig = {
     intervalHours: 1,
 
     // Waktu mulai dan selesai scraping (24 jam format)
-    startTime: "06:00",
-    endTime: "23:00",
+    startTime: "00:00",
+    endTime: "23:59",
 
     // Jeda antar hotel (dalam detik)
     delayBetweenHotels: 30,
