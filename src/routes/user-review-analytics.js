@@ -16,28 +16,32 @@ router.get('/time-analytics', async (req, res) => {
                 AND reply_date IS NOT NULL
         `;
 
-        // Get weekly averages (last 7 days)
+        // Get weekly averages (current week)
         const weeklyQuery = `
             SELECT 
                 AVG(EXTRACT(EPOCH FROM (reply_date - published_at)) / 86400) as average_days,
-                COUNT(*) as review_count
+                COUNT(*) as review_count,
+                DATE_TRUNC('week', NOW()) as week_start,
+                DATE_TRUNC('week', NOW()) + INTERVAL '6 days' as week_end
             FROM review_items 
             WHERE is_replied = 1 
                 AND published_at IS NOT NULL 
                 AND reply_date IS NOT NULL
-                AND published_at >= NOW() - INTERVAL '7 days'
+                AND DATE_TRUNC('week', published_at) = DATE_TRUNC('week', NOW())
         `;
 
-        // Get monthly averages (last 30 days)
+        // Get monthly averages (current month)
         const monthlyQuery = `
             SELECT 
                 AVG(EXTRACT(EPOCH FROM (reply_date - published_at)) / 86400) as average_days,
-                COUNT(*) as review_count
+                COUNT(*) as review_count,
+                DATE_TRUNC('month', NOW()) as month_start,
+                DATE_TRUNC('month', NOW()) + INTERVAL '1 month' - INTERVAL '1 day' as month_end
             FROM review_items 
             WHERE is_replied = 1 
                 AND published_at IS NOT NULL 
                 AND reply_date IS NOT NULL
-                AND published_at >= NOW() - INTERVAL '30 days'
+                AND DATE_TRUNC('month', published_at) = DATE_TRUNC('month', NOW())
         `;
 
         // Execute all queries
@@ -54,14 +58,16 @@ router.get('/time-analytics', async (req, res) => {
             data: {
                 overall_average_days: parseFloat(overallResult.rows[0]?.average_days) || 0,
                 weekly_averages: [{
-                    week_start: '2025-09-01',
-                    week_end: '2025-09-07',
+                    week_start: weeklyResult.rows[0]?.week_start ? new Date(weeklyResult.rows[0].week_start).toISOString().split('T')[0] : null,
+                    week_end: weeklyResult.rows[0]?.week_end ? new Date(weeklyResult.rows[0].week_end).toISOString().split('T')[0] : null,
                     average_days: parseFloat(weeklyResult.rows[0]?.average_days) || 0,
                     review_count: parseInt(weeklyResult.rows[0]?.review_count) || 0
                 }],
                 monthly_averages: [{
-                    month: 9,
-                    year: 2025,
+                    month: monthlyResult.rows[0]?.month_start ? new Date(monthlyResult.rows[0].month_start).getMonth() + 1 : null,
+                    year: monthlyResult.rows[0]?.month_start ? new Date(monthlyResult.rows[0].month_start).getFullYear() : null,
+                    month_start: monthlyResult.rows[0]?.month_start ? new Date(monthlyResult.rows[0].month_start).toISOString().split('T')[0] : null,
+                    month_end: monthlyResult.rows[0]?.month_end ? new Date(monthlyResult.rows[0].month_end).toISOString().split('T')[0] : null,
                     average_days: parseFloat(monthlyResult.rows[0]?.average_days) || 0,
                     review_count: parseInt(monthlyResult.rows[0]?.review_count) || 0
                 }]
