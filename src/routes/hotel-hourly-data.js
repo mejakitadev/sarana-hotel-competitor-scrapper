@@ -20,15 +20,23 @@ router.get('/today', async (req, res) => {
     try {
         console.log('🔍 Fetching hourly data for today...');
 
-        // Get today's date range
-        const today = new Date();
-        const startOfDay = new Date(today);
-        startOfDay.setHours(0, 0, 0, 0);
+        // Get WIB date range (current date in WIB timezone)
+        const now = new Date();
+        const wibNow = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Convert to WIB
 
-        const endOfDay = new Date(today);
-        endOfDay.setHours(23, 59, 59, 999);
+        // Get start and end of WIB day
+        const wibStartOfDay = new Date(wibNow);
+        wibStartOfDay.setHours(0, 0, 0, 0);
 
-        console.log('📅 Date range:', startOfDay.toISOString(), 'to', endOfDay.toISOString());
+        const wibEndOfDay = new Date(wibNow);
+        wibEndOfDay.setHours(23, 59, 59, 999);
+
+        // Convert WIB times back to UTC for database query
+        const utcStartOfDay = new Date(wibStartOfDay.getTime() - (7 * 60 * 60 * 1000));
+        const utcEndOfDay = new Date(wibEndOfDay.getTime() - (7 * 60 * 60 * 1000));
+
+        console.log('📅 WIB Date range:', wibStartOfDay.toISOString(), 'to', wibEndOfDay.toISOString());
+        console.log('📅 UTC Date range for DB:', utcStartOfDay.toISOString(), 'to', utcEndOfDay.toISOString());
 
         // Query to get hourly data for today
         const query = `
@@ -48,7 +56,7 @@ router.get('/today', async (req, res) => {
             ORDER BY hd.id, EXTRACT(HOUR FROM hsl.search_timestamp), hsl.search_timestamp DESC
         `;
 
-        const result = await pool.query(query, [startOfDay, endOfDay]);
+        const result = await pool.query(query, [utcStartOfDay, utcEndOfDay]);
 
         console.log(`📊 Found ${result.rows.length} records for today`);
 
@@ -113,7 +121,7 @@ router.get('/today', async (req, res) => {
                 chartData,
                 hotelList,
                 timeSlots,
-                date: today.toISOString().split('T')[0],
+                date: wibNow.toISOString().split('T')[0], // WIB date
                 totalRecords: result.rows.length
             }
         });
@@ -248,11 +256,17 @@ router.get('/latest', async (req, res) => {
         const now = new Date();
         const wibNow = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Convert to WIB
         const currentHour = wibNow.getHours();
-        const startOfHour = new Date(now);
-        startOfHour.setMinutes(0, 0, 0);
 
-        const endOfHour = new Date(now);
-        endOfHour.setMinutes(59, 59, 999);
+        // Get WIB hour range
+        const wibStartOfHour = new Date(wibNow);
+        wibStartOfHour.setMinutes(0, 0, 0);
+
+        const wibEndOfHour = new Date(wibNow);
+        wibEndOfHour.setMinutes(59, 59, 999);
+
+        // Convert WIB times back to UTC for database query
+        const utcStartOfHour = new Date(wibStartOfHour.getTime() - (7 * 60 * 60 * 1000));
+        const utcEndOfHour = new Date(wibEndOfHour.getTime() - (7 * 60 * 60 * 1000));
 
         // Query to get latest prices
         const query = `
@@ -271,7 +285,7 @@ router.get('/latest', async (req, res) => {
             ORDER BY hd.id, hsl.search_timestamp DESC
         `;
 
-        const result = await pool.query(query, [startOfHour, endOfHour]);
+        const result = await pool.query(query, [utcStartOfHour, utcEndOfHour]);
 
         console.log(`📊 Found ${result.rows.length} latest prices`);
 
@@ -301,3 +315,6 @@ router.get('/latest', async (req, res) => {
 });
 
 module.exports = router;
+
+
+
