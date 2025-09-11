@@ -125,6 +125,119 @@ const options = {
                             description: 'Pesan error'
                         }
                     }
+                },
+                InstagramAccount: {
+                    type: 'object',
+                    properties: {
+                        id: {
+                            type: 'integer',
+                            description: 'Account ID'
+                        },
+                        username: {
+                            type: 'string',
+                            description: 'Username Instagram'
+                        },
+                        account_url: {
+                            type: 'string',
+                            description: 'URL akun Instagram'
+                        },
+                        created_at: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Waktu akun dibuat'
+                        },
+                        total_posts: {
+                            type: 'integer',
+                            description: 'Total postingan yang di-scrape'
+                        },
+                        latest_post_date: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Tanggal postingan terbaru'
+                        }
+                    }
+                },
+                InstagramPost: {
+                    type: 'object',
+                    properties: {
+                        id: {
+                            type: 'integer',
+                            description: 'Post ID'
+                        },
+                        post_url: {
+                            type: 'string',
+                            description: 'URL postingan Instagram'
+                        },
+                        caption: {
+                            type: 'string',
+                            description: 'Caption postingan'
+                        },
+                        post_date: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Tanggal postingan'
+                        },
+                        type: {
+                            type: 'string',
+                            enum: ['post', 'reel'],
+                            description: 'Jenis postingan'
+                        }
+                    }
+                },
+                InstagramAccountWithPosts: {
+                    type: 'object',
+                    properties: {
+                        account_id: {
+                            type: 'integer',
+                            description: 'Account ID'
+                        },
+                        username: {
+                            type: 'string',
+                            description: 'Username Instagram'
+                        },
+                        account_url: {
+                            type: 'string',
+                            description: 'URL akun Instagram'
+                        },
+                        posts: {
+                            type: 'array',
+                            items: {
+                                $ref: '#/components/schemas/InstagramPost'
+                            },
+                            description: 'Daftar postingan terbaru'
+                        }
+                    }
+                },
+                InstagramStats: {
+                    type: 'object',
+                    properties: {
+                        total_accounts: {
+                            type: 'integer',
+                            description: 'Total akun Instagram yang di-scrape'
+                        },
+                        total_posts: {
+                            type: 'integer',
+                            description: 'Total postingan yang di-scrape'
+                        },
+                        posts_today: {
+                            type: 'integer',
+                            description: 'Postingan yang di-scrape hari ini'
+                        },
+                        posts_this_week: {
+                            type: 'integer',
+                            description: 'Postingan yang di-scrape minggu ini'
+                        },
+                        latest_post_date: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Tanggal postingan terbaru'
+                        },
+                        earliest_post_date: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Tanggal postingan terlama'
+                        }
+                    }
                 }
             }
         }

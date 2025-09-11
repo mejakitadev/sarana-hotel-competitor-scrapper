@@ -29,6 +29,7 @@ app.use('/api/hotel-data', require('./src/routes/hotel-data'));
 app.use('/api/hotel-crud', require('./src/routes/hotel-crud'));
 app.use('/api/hotel-hourly-data', require('./src/routes/hotel-hourly-data'));
 app.use('/api/user-review-analytics', require('./src/routes/user-review-analytics'));
+app.use('/api/instagram-data', require('./src/routes/instagram-data'));
 
 // Health check endpoint (enhanced)
 app.get('/health', (req, res) => {
@@ -45,6 +46,7 @@ app.get('/health', (req, res) => {
             hotelCrud: '/api/hotel-crud',
             hotelHourlyData: '/api/hotel-hourly-data',
             userReviewAnalytics: '/api/user-review-analytics',
+            instagramData: '/api/instagram-data',
             swagger: '/api-docs'
         }
     });
@@ -74,4 +76,5 @@ app.listen(PORT, () => {
     console.log(`📊 Hotel Data API: http://localhost:${PORT}/api/hotel-data`);
     console.log(`🔧 Hotel CRUD API: http://localhost:${PORT}/api/hotel-crud`);
     console.log(`⏰ Hotel Hourly Data API: http://localhost:${PORT}/api/hotel-hourly-data`);
+    console.log(`📱 Instagram Data API: http://localhost:${PORT}/api/instagram-data`);
 });
