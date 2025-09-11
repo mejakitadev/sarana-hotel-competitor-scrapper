@@ -9,6 +9,9 @@ elif [ "$WORKER_TYPE" = "user_review_scrapper" ]; then
 elif [ "$WORKER_TYPE" = "server_api" ]; then
     echo "Running in server api mode..."
     node server.js
+elif [ "$WORKER_TYPE" = "instagram_scrapper" ]; then
+    echo "Running in instagram scrapper mode..."
+    node src/scripts/instagram-scheduler.js
 else
     echo "Running nothing. Only eternity."
 fi
