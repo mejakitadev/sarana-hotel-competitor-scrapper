@@ -12,33 +12,64 @@ const pool = new Pool({
 });
 
 /**
- * Get hourly price data for all hotels for today
+ * Get hourly price data for all hotels for last 12 hours
  * @route GET /api/hotel-hourly-data/today
- * @description Get price data grouped by hour for all hotels for today only
+ * @description Get price data grouped by hour for all hotels for last 12 hours dynamically
  */
 router.get('/today', async (req, res) => {
     try {
-        console.log('🔍 Fetching hourly data for today...');
+        console.log('🔍 Fetching hourly data for last 12 hours...');
 
-        // Get WIB date range (current date in WIB timezone)
+        // Get WIB current time
         const now = new Date();
         const wibNow = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Convert to WIB
 
-        // Get start and end of WIB day
-        const wibStartOfDay = new Date(wibNow);
-        wibStartOfDay.setHours(0, 0, 0, 0);
+        // First, get the latest scraping time from database
+        const latestScrapingQuery = `
+            SELECT MAX(hsl.search_timestamp) as latest_timestamp
+            FROM hotel_scraping_results_log hsl
+            WHERE hsl.status = 'success'
+                AND hsl.room_price IS NOT NULL
+        `;
 
-        const wibEndOfDay = new Date(wibNow);
-        wibEndOfDay.setHours(23, 59, 59, 999);
+        const latestResult = await pool.query(latestScrapingQuery);
+        const latestScrapingTime = latestResult.rows[0].latest_timestamp;
+
+        if (!latestScrapingTime) {
+            return res.json({
+                success: true,
+                data: {
+                    chartData: [],
+                    hotelList: [],
+                    timeSlots: [],
+                    period: "Tidak ada data scraping",
+                    startTime: null,
+                    endTime: null,
+                    totalRecords: 0
+                }
+            });
+        }
+
+        // Convert latest scraping time to WIB
+        const latestScrapingWIB = new Date(latestScrapingTime.getTime() + (7 * 60 * 60 * 1000));
+
+        // Calculate 12 hours back from latest scraping time
+        const wibEndTime = new Date(latestScrapingWIB);
+        const wibStartTime = new Date(latestScrapingWIB.getTime() - (12 * 60 * 60 * 1000)); // 12 hours ago
+
+        console.log('🕐 Latest scraping time (UTC):', latestScrapingTime.toISOString());
+        console.log('🕐 Latest scraping time (WIB):', latestScrapingWIB.toISOString());
+        console.log('🕐 WIB Start time (12h ago):', wibStartTime.toISOString());
+        console.log('🕐 WIB End time (latest):', wibEndTime.toISOString());
 
         // Convert WIB times back to UTC for database query
-        const utcStartOfDay = new Date(wibStartOfDay.getTime() - (7 * 60 * 60 * 1000));
-        const utcEndOfDay = new Date(wibEndOfDay.getTime() - (7 * 60 * 60 * 1000));
+        const utcStartTime = new Date(wibStartTime.getTime() - (7 * 60 * 60 * 1000));
+        const utcEndTime = new Date(wibEndTime.getTime() - (7 * 60 * 60 * 1000));
 
-        console.log('📅 WIB Date range:', wibStartOfDay.toISOString(), 'to', wibEndOfDay.toISOString());
-        console.log('📅 UTC Date range for DB:', utcStartOfDay.toISOString(), 'to', utcEndOfDay.toISOString());
+        console.log('📅 WIB Time range (last 12 hours):', wibStartTime.toISOString(), 'to', wibEndTime.toISOString());
+        console.log('📅 UTC Time range for DB:', utcStartTime.toISOString(), 'to', utcEndTime.toISOString());
 
-        // Query to get hourly data for today
+        // Query to get hourly data for last 12 hours
         const query = `
             SELECT 
                 hd.id as hotel_id,
@@ -56,18 +87,76 @@ router.get('/today', async (req, res) => {
             ORDER BY hd.id, EXTRACT(HOUR FROM hsl.search_timestamp), hsl.search_timestamp DESC
         `;
 
-        const result = await pool.query(query, [utcStartOfDay, utcEndOfDay]);
+        const result = await pool.query(query, [utcStartTime, utcEndTime]);
 
-        console.log(`📊 Found ${result.rows.length} records for today`);
+        console.log(`📊 Found ${result.rows.length} records for last 12 hours`);
+
+        // Debug query specifically for Swiss-Belinn
+        const swissDebugQuery = `
+            SELECT 
+                hd.id as hotel_id,
+                hd.hotel_name,
+                hsl.search_timestamp,
+                hsl.room_price,
+                hsl.status,
+                EXTRACT(HOUR FROM hsl.search_timestamp) as hour
+            FROM hotel_data hd
+            LEFT JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
+            WHERE hd.hotel_name ILIKE '%swiss%belinn%'
+                AND hsl.search_timestamp >= $1 
+                AND hsl.search_timestamp <= $2
+            ORDER BY hsl.search_timestamp DESC
+            LIMIT 5
+        `;
+
+        const swissDebugResult = await pool.query(swissDebugQuery, [utcStartTime, utcEndTime]);
+        console.log(`🏨 Swiss-Belinn debug query found ${swissDebugResult.rows.length} records:`);
+        swissDebugResult.rows.forEach((row, index) => {
+            console.log(`  Debug ${index}: Hotel=${row.hotel_name}, Status=${row.status}, Price=${row.room_price}, Time=${row.search_timestamp}, Hour=${row.hour}`);
+        });
 
         // Group data by hotel and hour
         const hotelHourlyData = {};
 
-        // Initialize time slots (00:00 to 23:00) - Full 24 hours
+        // Generate time slots for last 12 hours dynamically
         const timeSlots = [];
-        for (let hour = 0; hour <= 23; hour++) {
+
+        // Round latest scraping time to the nearest hour for cleaner display
+        const latestScrapingHour = latestScrapingWIB.getHours();
+        const roundedLatestTime = new Date(latestScrapingWIB);
+        roundedLatestTime.setMinutes(0, 0, 0); // Round to hour
+
+        // Calculate 12 hours back from rounded latest time
+        const roundedStartTime = new Date(roundedLatestTime.getTime() - (11 * 60 * 60 * 1000)); // 11 hours back to get 12 total hours
+
+        console.log('🕐 Latest scraping hour:', latestScrapingHour);
+        console.log('🕐 Rounded latest time:', roundedLatestTime.toISOString());
+        console.log('🕐 Rounded start time:', roundedStartTime.toISOString());
+
+        // Create time slots for each hour in the 12-hour window
+        for (let i = 0; i < 12; i++) {
+            const slotTime = new Date(roundedStartTime.getTime() + (i * 60 * 60 * 1000));
+            const hour = slotTime.getHours();
             timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
         }
+
+        console.log('⏰ Generated time slots:', timeSlots);
+        console.log('📊 Raw database results:');
+        result.rows.forEach((row, index) => {
+            if (index < 10) { // Show first 10 results for debugging
+                console.log(`  Row ${index}: Hotel=${row.hotel_name}, UTC Hour=${row.hour}, WIB Hour=${(parseInt(row.hour) + 7) % 24}, Price=${row.room_price}, Time=${row.search_timestamp}`);
+            }
+        });
+
+        // Check specifically for Swiss-Belinn data
+        const swissBelinnRows = result.rows.filter(row =>
+            row.hotel_name.toLowerCase().includes('swiss') ||
+            row.hotel_name.toLowerCase().includes('belinn')
+        );
+        console.log(`🏨 Swiss-Belinn rows found: ${swissBelinnRows.length}`);
+        swissBelinnRows.forEach((row, index) => {
+            console.log(`  Swiss-Belinn ${index}: Hotel=${row.hotel_name}, UTC Hour=${row.hour}, WIB Hour=${(parseInt(row.hour) + 7) % 24}, Price=${row.room_price}, Time=${row.search_timestamp}`);
+        });
 
         // Process results - Convert UTC hour to WIB hour
         result.rows.forEach(row => {
@@ -77,6 +166,11 @@ router.get('/today', async (req, res) => {
             const wibHour = (utcHour + 7) % 24; // Convert UTC to WIB
             const price = parseFloat(row.room_price);
             const timeSlot = `${wibHour.toString().padStart(2, '0')}:00`;
+
+            // Debug logging for Swiss-Belinn Cikarang
+            if (hotelName.toLowerCase().includes('swiss') || hotelName.toLowerCase().includes('belinn')) {
+                console.log(`🏨 Swiss-Belinn data: UTC ${utcHour}:00 -> WIB ${wibHour}:00 (${timeSlot}), Price: Rp ${price}, Time: ${row.search_timestamp}`);
+            }
 
             if (!hotelHourlyData[hotelId]) {
                 hotelHourlyData[hotelId] = {
@@ -106,6 +200,28 @@ router.get('/today', async (req, res) => {
             return dataPoint;
         });
 
+        console.log('📈 Chart data points:');
+        chartData.forEach((point, index) => {
+            if (index < 3) { // Show first 3 data points
+                console.log(`  Point ${index}: Time=${point.time}, Data=${JSON.stringify(point)}`);
+            }
+        });
+
+        // Debug Swiss-Belinn data in chart
+        const swissBelinnKey = Object.keys(hotelHourlyData).find(key =>
+            hotelHourlyData[key].hotel_name.toLowerCase().includes('swiss') ||
+            hotelHourlyData[key].hotel_name.toLowerCase().includes('belinn')
+        );
+
+        if (swissBelinnKey) {
+            const swissBelinnData = hotelHourlyData[swissBelinnKey];
+            console.log(`🏨 Swiss-Belinn chart data:`, swissBelinnData.prices);
+            console.log(`🏨 Swiss-Belinn at 14:00:`, swissBelinnData.prices['14:00']);
+        } else {
+            console.log('❌ Swiss-Belinn not found in hotelHourlyData');
+            console.log('🏨 Available hotels:', Object.values(hotelHourlyData).map(h => h.hotel_name));
+        }
+
         // Get hotel list for legend
         const hotelList = Object.values(hotelHourlyData).map(hotel => ({
             id: hotel.hotel_id,
@@ -115,13 +231,21 @@ router.get('/today', async (req, res) => {
 
         console.log(`✅ Processed data for ${hotelList.length} hotels`);
 
+        // Calculate period display string based on rounded latest scraping time
+        const periodStart = `${roundedStartTime.getHours().toString().padStart(2, '0')}:00`;
+        const periodEnd = `${roundedLatestTime.getHours().toString().padStart(2, '0')}:00`;
+        const periodString = `${periodStart} - ${periodEnd} WIB (12 jam terakhir dari scraping terbaru)`;
+
         res.json({
             success: true,
             data: {
                 chartData,
                 hotelList,
                 timeSlots,
-                date: wibNow.toISOString().split('T')[0], // WIB date
+                period: periodString,
+                startTime: roundedStartTime.toISOString(),
+                endTime: roundedLatestTime.toISOString(),
+                latestScrapingTime: latestScrapingWIB.toISOString(),
                 totalRecords: result.rows.length
             }
         });
