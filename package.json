@@ -18,7 +18,12 @@
         "api": "node server.js",
         "api-dev": "nodemon server.js",
         "dev": "nodemon server.js",
-        "fix-deps": "node fix-dependencies.js"
+        "fix-deps": "node fix-dependencies.js",
+        "instagram": "node src/scripts/instagram-scraper.js",
+        "instagram-dev": "nodemon src/scripts/instagram-scraper.js",
+        "instagram-schedule": "node src/scripts/instagram-scheduler.js",
+        "instagram-manage": "node src/scripts/manage-instagram-accounts.js",
+        "check-db": "node check-database.js"
     },
     "keywords": [
         "hotel",
@@ -38,6 +43,8 @@
         "node-cron": "^3.0.3",
         "pg": "^8.16.3",
         "playwright": "^1.55.0",
+        "prompt-sync": "^4.2.0",
+        "readline-sync": "^1.4.10",
         "swagger-ui-express": "^5.0.0",
         "swagger-jsdoc": "^6.2.8"
     },

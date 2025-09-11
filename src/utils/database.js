@@ -42,6 +42,7 @@ class DatabaseManager {
 
             // Buat tabel jika belum ada
             await this.createTables();
+            await this.createSocmedTablesIfNotExists();
 
             return true;
         } catch (error) {
@@ -123,6 +124,95 @@ class DatabaseManager {
             console.log(chalk.green('✅ Tabel database berhasil dibuat/diverifikasi'));
         } catch (error) {
             console.log(chalk.red(`❌ Gagal membuat tabel: ${error.message}`));
+        }
+    }
+
+    async createSocmedTablesIfNotExists() {
+        try {
+            // Check if tables already exist
+            const checkTablesQuery = `
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('socmed_list', 'socmed_post', 'socmed_scraping_log');
+            `;
+
+            const result = await this.pool.query(checkTablesQuery);
+            const existingTables = result.rows.map(row => row.table_name);
+
+            // If all tables exist, skip creation
+            if (existingTables.length === 3) {
+                console.log(chalk.blue('ℹ️ Tabel Social Media sudah ada, skip migration'));
+                return;
+            }
+
+            console.log(chalk.yellow('🔄 Membuat tabel Social Media...'));
+
+            // Create socmed_list table (social media accounts list)
+            const createSocmedListTableQuery = `
+                CREATE TABLE IF NOT EXISTS socmed_list (
+                    id SERIAL PRIMARY KEY,
+                    account_url VARCHAR(500) NOT NULL,
+                    username VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_socmed_list_username ON socmed_list(username);
+                CREATE INDEX IF NOT EXISTS idx_socmed_list_account_url ON socmed_list(account_url);
+                CREATE INDEX IF NOT EXISTS idx_socmed_list_created_at ON socmed_list(created_at);
+            `;
+
+            await this.pool.query(createSocmedListTableQuery);
+
+            // Create socmed_post table (social media posts)
+            const createSocmedPostTableQuery = `
+                CREATE TABLE IF NOT EXISTS socmed_post (
+                    id SERIAL PRIMARY KEY,
+                    post_url VARCHAR(500) UNIQUE NOT NULL,
+                    caption TEXT,
+                    post_date TIMESTAMP,
+                    type VARCHAR(50) DEFAULT 'post' CHECK (type IN ('reel', 'post'))
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_socmed_post_url ON socmed_post(post_url);
+                CREATE INDEX IF NOT EXISTS idx_socmed_post_date ON socmed_post(post_date);
+                CREATE INDEX IF NOT EXISTS idx_socmed_post_type ON socmed_post(type);
+            `;
+
+            await this.pool.query(createSocmedPostTableQuery);
+
+            // Create socmed_scraping_log table (scraping logs)
+            const createSocmedScrapingLogTableQuery = `
+                CREATE TABLE IF NOT EXISTS socmed_scraping_log (
+                    id SERIAL PRIMARY KEY,
+                    account_id INTEGER REFERENCES socmed_list(id) ON DELETE CASCADE,
+                    url_post VARCHAR(500) NOT NULL,
+                    caption TEXT,
+                    status VARCHAR(50) DEFAULT 'success' CHECK (status IN ('success', 'error', 'in_progress')),
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_socmed_scraping_log_account_id ON socmed_scraping_log(account_id);
+                CREATE INDEX IF NOT EXISTS idx_socmed_scraping_log_url_post ON socmed_scraping_log(url_post);
+                CREATE INDEX IF NOT EXISTS idx_socmed_scraping_log_status ON socmed_scraping_log(status);
+                CREATE INDEX IF NOT EXISTS idx_socmed_scraping_log_created_at ON socmed_scraping_log(created_at);
+            `;
+
+            await this.pool.query(createSocmedScrapingLogTableQuery);
+
+            // Insert default social media account
+            const insertDefaultAccountQuery = `
+                INSERT INTO socmed_list (account_url, username) 
+                VALUES ('https://www.instagram.com/cikarang.people/', 'cikarang.people')
+                ON CONFLICT DO NOTHING;
+            `;
+
+            await this.pool.query(insertDefaultAccountQuery);
+
+            console.log(chalk.green('✅ Tabel Social Media berhasil dibuat'));
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal membuat tabel Social Media: ${error.message}`));
         }
     }
 
@@ -792,6 +882,299 @@ class DatabaseManager {
         } catch (error) {
             console.log(chalk.red(`❌ Gagal ambil statistik database: ${error.message}`));
             return null;
+        }
+    }
+
+    // ==================== SOCIAL MEDIA DATABASE METHODS ====================
+
+    // Social Media Accounts Management (socmed_list)
+    async getAllSocmedAccounts() {
+        try {
+            const query = `
+                SELECT id, account_url, username, created_at
+                FROM socmed_list
+                ORDER BY created_at DESC
+            `;
+            const result = await this.pool.query(query);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting all social media accounts: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedAccountById(id) {
+        try {
+            const query = `
+                SELECT id, account_url, username, created_at
+                FROM socmed_list
+                WHERE id = $1
+            `;
+            const result = await this.pool.query(query, [id]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media account by ID: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedAccountByUsername(username) {
+        try {
+            const query = `
+                SELECT id, account_url, username, created_at
+                FROM socmed_list
+                WHERE username = $1
+            `;
+            const result = await this.pool.query(query, [username]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media account by username: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async addSocmedAccount(accountUrl, username) {
+        try {
+            const query = `
+                INSERT INTO socmed_list (account_url, username)
+                VALUES ($1, $2)
+                RETURNING id, account_url, username, created_at
+            `;
+            const result = await this.pool.query(query, [accountUrl, username]);
+            console.log(chalk.green(`✅ Social media account ${username} added successfully`));
+            return result.rows[0];
+        } catch (error) {
+            if (error.code === '23505') { // Unique violation
+                console.log(chalk.red(`❌ Social media account ${username} already exists`));
+            } else {
+                console.log(chalk.red(`❌ Error adding social media account ${username}: ${error.message}`));
+            }
+            throw error;
+        }
+    }
+
+    async updateSocmedAccount(id, accountUrl, username) {
+        try {
+            const query = `
+                UPDATE socmed_list
+                SET account_url = $2, username = $3
+                WHERE id = $1
+                RETURNING id, account_url, username, created_at
+            `;
+            const result = await this.pool.query(query, [id, accountUrl, username]);
+
+            if (result.rows.length === 0) {
+                throw new Error(`Social media account with ID ${id} not found`);
+            }
+
+            console.log(chalk.green(`✅ Social media account ${username} updated successfully`));
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error updating social media account: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async deleteSocmedAccount(id) {
+        try {
+            const query = `
+                DELETE FROM socmed_list
+                WHERE id = $1
+                RETURNING username
+            `;
+            const result = await this.pool.query(query, [id]);
+
+            if (result.rows.length === 0) {
+                throw new Error(`Social media account with ID ${id} not found`);
+            }
+
+            console.log(chalk.green(`✅ Social media account ${result.rows[0].username} deleted successfully`));
+            return true;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error deleting social media account: ${error.message}`));
+            throw error;
+        }
+    }
+
+    // Social Media Posts Management (socmed_post)
+    async getSocmedPostByUrl(postUrl) {
+        try {
+            const query = `
+                SELECT id, post_url, caption, post_date, type
+                FROM socmed_post
+                WHERE post_url = $1
+            `;
+            const result = await this.pool.query(query, [postUrl]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media post by URL: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async upsertSocmedPost(postUrl, caption, postDate, type = 'post') {
+        try {
+            const query = `
+                INSERT INTO socmed_post (post_url, caption, post_date, type)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (post_url) 
+                DO UPDATE SET 
+                    caption = EXCLUDED.caption,
+                    post_date = EXCLUDED.post_date,
+                    type = EXCLUDED.type
+                RETURNING id, post_url, caption, post_date, type
+            `;
+            const result = await this.pool.query(query, [postUrl, caption, postDate, type]);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error upserting social media post: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedPostsByAccount(accountId, limit = 100, offset = 0) {
+        try {
+            const query = `
+                SELECT p.id, p.post_url, p.caption, p.post_date, p.type
+                FROM socmed_post p
+                JOIN socmed_scraping_log s ON p.post_url = s.url_post
+                WHERE s.account_id = $1
+                ORDER BY p.post_date DESC, s.created_at DESC
+                LIMIT $2 OFFSET $3
+            `;
+            const result = await this.pool.query(query, [accountId, limit, offset]);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media posts by account: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getRecentSocmedPosts(limit = 50) {
+        try {
+            const query = `
+                SELECT p.id, p.post_url, p.caption, p.post_date, p.type,
+                       s.account_id, sl.username
+                FROM socmed_post p
+                JOIN socmed_scraping_log s ON p.post_url = s.url_post
+                JOIN socmed_list sl ON s.account_id = sl.id
+                ORDER BY p.post_date DESC, s.created_at DESC
+                LIMIT $1
+            `;
+            const result = await this.pool.query(query, [limit]);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting recent social media posts: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedPostsCount() {
+        try {
+            const query = 'SELECT COUNT(*) as total FROM socmed_post';
+            const result = await this.pool.query(query);
+            return parseInt(result.rows[0].total);
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media posts count: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedAccountsCount() {
+        try {
+            const query = 'SELECT COUNT(*) as total FROM socmed_list';
+            const result = await this.pool.query(query);
+            return parseInt(result.rows[0].total);
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media accounts count: ${error.message}`));
+            throw error;
+        }
+    }
+
+    // Social Media Scraping Log Management (socmed_scraping_log)
+    async addSocmedScrapingLog(accountId, urlPost, caption, status = 'success', errorMessage = null) {
+        try {
+            const query = `
+                INSERT INTO socmed_scraping_log (account_id, url_post, caption, status, error_message)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id, account_id, url_post, caption, status, error_message, created_at
+            `;
+            const result = await this.pool.query(query, [accountId, urlPost, caption, status, errorMessage]);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error adding social media scraping log: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedScrapingLogs(accountId = null, limit = 100, offset = 0) {
+        try {
+            let query = `
+                SELECT s.id, s.account_id, s.url_post, s.caption, s.status, s.error_message, s.created_at,
+                       sl.username, sl.account_url
+                FROM socmed_scraping_log s
+                JOIN socmed_list sl ON s.account_id = sl.id
+            `;
+            const params = [];
+
+            if (accountId) {
+                query += ' WHERE s.account_id = $1';
+                params.push(accountId);
+            }
+
+            query += ' ORDER BY s.created_at DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+            params.push(limit, offset);
+
+            const result = await this.pool.query(query, params);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media scraping logs: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getSocmedScrapingStats() {
+        try {
+            const query = `
+                SELECT 
+                    COUNT(DISTINCT sl.id) as total_accounts,
+                    COUNT(s.id) as total_scraping_logs,
+                    COUNT(CASE WHEN s.status = 'success' THEN 1 END) as successful_scrapes,
+                    COUNT(CASE WHEN s.status = 'error' THEN 1 END) as failed_scrapes,
+                    COUNT(CASE WHEN s.status = 'in_progress' THEN 1 END) as in_progress_scrapes,
+                    MAX(s.created_at) as last_scraping_time
+                FROM socmed_list sl
+                LEFT JOIN socmed_scraping_log s ON sl.id = s.account_id
+            `;
+            const result = await this.pool.query(query);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting social media scraping stats: ${error.message}`));
+            throw error;
+        }
+    }
+
+    // Combined Statistics (Hotel + Social Media)
+    async getCombinedDatabaseStats() {
+        try {
+            const query = `
+                SELECT 
+                    (SELECT COUNT(*) FROM hotel_data) as total_hotels,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'success') as successful_hotel_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'error') as failed_hotel_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log WHERE status = 'in_progress') as in_progress_hotel_scrapes,
+                    (SELECT COUNT(*) FROM hotel_scraping_results_log) as total_hotel_logs,
+                    (SELECT COUNT(*) FROM socmed_list) as total_socmed_accounts,
+                    (SELECT COUNT(*) FROM socmed_post) as total_socmed_posts,
+                    (SELECT COUNT(*) FROM socmed_scraping_log) as total_socmed_logs,
+                    (SELECT MAX(search_timestamp) FROM hotel_scraping_results_log) as last_hotel_scrape_time,
+                    (SELECT MAX(created_at) FROM socmed_scraping_log) as last_socmed_scrape_time
+            `;
+            const result = await this.pool.query(query);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting combined database stats: ${error.message}`));
+            throw error;
         }
     }
 }

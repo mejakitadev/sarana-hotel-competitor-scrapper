@@ -1,0 +1,20 @@
+[
+    {
+        "username": "cikarang.people",
+        "url": "https://www.instagram.com/cikarang.people/",
+        "enabled": true,
+        "description": "Cikarang People Community"
+    },
+    {
+        "username": "example_account_2",
+        "url": "https://www.instagram.com/example_account_2/",
+        "enabled": false,
+        "description": "Example Account 2 - Disabled"
+    },
+    {
+        "username": "example_account_3",
+        "url": "https://www.instagram.com/example_account_3/",
+        "enabled": false,
+        "description": "Example Account 3 - Disabled"
+    }
+]

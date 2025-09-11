@@ -38,7 +38,7 @@ class HourlyHotelScheduler {
 
         if (!cronExpression) {
             console.error(chalk.red('❌ SCHEDULER_CRON tidak ada di file .env'));
-            console.error(chalk.red('   Pastikan SCHEDULER_CRON berisi cron expression (contoh: 0 * * * *)'));
+            console.error(chalk.red('   Pastikan SCHEDULER_CRON berisi cron expression (contoh: 0 */3 * * *)'));
             process.exit(1);
         }
 
@@ -46,7 +46,7 @@ class HourlyHotelScheduler {
         if (!cron.validate(cronExpression)) {
             console.error(chalk.red('❌ SCHEDULER_CRON tidak valid'));
             console.error(chalk.red(`   Cron expression: ${cronExpression}`));
-            console.error(chalk.red('   Format yang benar: 0 * * * * (setiap jam pada menit ke-0)'));
+            console.error(chalk.red('   Format yang benar: 0 */3 * * * (setiap 3 jam pada menit ke-0)'));
             process.exit(1);
         }
 
