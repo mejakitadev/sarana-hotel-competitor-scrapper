@@ -56,11 +56,9 @@ class InstagramScraperBot {
                     this.log(`🔄 Mencoba memulai browser (attempt ${retryCount + 1}/${maxRetries})...`, 'info');
 
                     // Launch browser dengan timeout protection
-                    // Set headless to false for debugging, true for production
-                    const isHeadless = process.env.NODE_ENV === 'production' || process.env.HEADLESS === 'true';
-
+                    // Set headless to true for production
                     const browserPromise = firefox.launch({
-                        headless: isHeadless, // Set to false for debugging
+                        headless: true, // Always headless for production
                         timeout: 30000, // 30 seconds timeout
                         args: [
                             '--no-sandbox',
