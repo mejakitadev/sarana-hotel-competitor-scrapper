@@ -56,8 +56,11 @@ class InstagramScraperBot {
                     this.log(`🔄 Mencoba memulai browser (attempt ${retryCount + 1}/${maxRetries})...`, 'info');
 
                     // Launch browser dengan timeout protection
+                    // Set headless to false for debugging, true for production
+                    const isHeadless = process.env.NODE_ENV === 'production' || process.env.HEADLESS === 'true';
+
                     const browserPromise = firefox.launch({
-                        headless: true, // Headless mode - browser tidak muncul di window
+                        headless: isHeadless, // Set to false for debugging
                         timeout: 30000, // 30 seconds timeout
                         args: [
                             '--no-sandbox',
@@ -383,18 +386,20 @@ class InstagramScraperBot {
 
             this.log(`📅 Filtering posts from today only (${todayStr})`, 'info');
 
-            // Take only the first 9 posts (most recent) - we'll filter by date during scraping
-            const maxPosts = Math.min(postLinks.length, 9);
-            const recentPosts = postLinks.slice(0, maxPosts);
+            // Take more posts to check (up to 20) to increase chances of finding today's posts
+            const maxPostsToCheck = Math.min(postLinks.length, 20);
+            const postsToCheck = postLinks.slice(0, maxPostsToCheck);
 
-            this.log(`📝 Akan scrape ${recentPosts.length} postingan teratas (filter hari ini)`, 'info');
+            this.log(`📝 Akan check ${postsToCheck.length} postingan teratas untuk mencari postingan hari ini`, 'info');
 
             // Scrape each post
             const scrapedData = [];
             let todayPostsCount = 0;
+            let checkedPostsCount = 0;
 
-            for (let i = 0; i < Math.min(recentPosts.length, 9); i++) {
-                this.log(`📝 Scraping postingan ${i + 1}/9`, 'info');
+            for (let i = 0; i < postsToCheck.length; i++) {
+                checkedPostsCount++;
+                this.log(`📝 Checking postingan ${checkedPostsCount}/${postsToCheck.length}`, 'info');
 
                 // Check if browser is still active
                 if (!this.browser || !this.page) {
@@ -404,16 +409,16 @@ class InstagramScraperBot {
 
                 try {
                     // Check date BEFORE scraping
-                    const isToday = await this.checkPostDate(recentPosts[i]);
+                    const isToday = await this.checkPostDate(postsToCheck[i]);
 
                     if (!isToday) {
-                        this.log(`⏭️ Postingan ${i + 1} di-skip (bukan hari ini)`, 'info');
+                        this.log(`⏭️ Postingan ${checkedPostsCount} di-skip (bukan hari ini)`, 'info');
                         continue;
                     }
 
-                    this.log(`📅 Postingan ${i + 1} adalah hari ini, mulai scraping...`, 'info');
+                    this.log(`📅 Postingan ${checkedPostsCount} adalah hari ini, mulai scraping...`, 'info');
 
-                    const postData = await this.scrapePost(recentPosts[i]);
+                    const postData = await this.scrapePost(postsToCheck[i]);
                     if (postData) {
                         scrapedData.push(postData);
                         todayPostsCount++;
@@ -421,10 +426,16 @@ class InstagramScraperBot {
                         // Save to database immediately after scraping
                         await this.saveSinglePostToDatabase(postData, accountId, username);
 
-                        this.log(`✅ Postingan ${i + 1} berhasil di-scrape dan disimpan`, 'success');
+                        this.log(`✅ Postingan ${checkedPostsCount} berhasil di-scrape dan disimpan`, 'success');
+                    }
+
+                    // Stop if we found enough posts for today (optional limit)
+                    if (todayPostsCount >= 5) {
+                        this.log(`🎯 Sudah menemukan ${todayPostsCount} postingan hari ini, cukup!`, 'success');
+                        break;
                     }
                 } catch (error) {
-                    this.log(`❌ Error saat scraping postingan ${i + 1}: ${error.message}`, 'error');
+                    this.log(`❌ Error saat scraping postingan ${checkedPostsCount}: ${error.message}`, 'error');
 
                     // If browser is closed or timeout, break the loop
                     if (error.message.includes('Target page, context or browser has been closed') ||
@@ -438,7 +449,7 @@ class InstagramScraperBot {
                     try {
                         await this.db.addSocmedScrapingLog(
                             accountId,
-                            recentPosts[i],
+                            postsToCheck[i],
                             '',
                             'error',
                             error.message
@@ -466,7 +477,8 @@ class InstagramScraperBot {
 
             // Data sudah disimpan satu per satu, tidak perlu batch save lagi
 
-            this.log(`✅ Scraping ${username} selesai! ${scrapedData.length} postingan hari ini berhasil di-scrape`, 'success');
+            this.log(`✅ Scraping ${username} selesai!`, 'success');
+            this.log(`📊 Summary: Checked ${checkedPostsCount} posts, found ${todayPostsCount} posts from today`, 'info');
             this.log(`📅 Total postingan hari ini: ${todayPostsCount}`, 'info');
 
             return scrapedData;
@@ -491,29 +503,115 @@ class InstagramScraperBot {
         this.log('📜 Scroll untuk memuat lebih banyak postingan...', 'info');
 
         // Wait for initial load
-        await this.page.waitForTimeout(3000);
+        await this.page.waitForTimeout(5000);
+
+        // Check for private account first
+        const isPrivateAccount = await this.page.evaluate(() => {
+            // Check for private account indicators using text content
+            const bodyText = document.body.innerText.toLowerCase();
+            const privateKeywords = [
+                'this account is private',
+                'this account is private',
+                'account is private',
+                'private account',
+                'follow to see their photos and videos'
+            ];
+
+            for (const keyword of privateKeywords) {
+                if (bodyText.includes(keyword)) {
+                    return true;
+                }
+            }
+
+            // Also check for specific elements that might indicate private account
+            const privateSelectors = [
+                '[data-testid="private-account"]',
+                'div[role="main"] h2',
+                'main h2',
+                'article h2'
+            ];
+
+            for (const selector of privateSelectors) {
+                const element = document.querySelector(selector);
+                if (element) {
+                    const text = element.innerText.toLowerCase();
+                    if (text.includes('private') || text.includes('follow')) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        });
+
+        if (isPrivateAccount) {
+            this.log('🔒 Akun ini bersifat privat, tidak dapat mengakses postingan', 'warning');
+            return;
+        }
 
         // Multiple scroll attempts to ensure posts are loaded
-        for (let i = 0; i < 5; i++) {
-            this.log(`📜 Scroll ${i + 1}/5...`, 'info');
-            await this.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-            await this.page.waitForTimeout(3000);
+        for (let i = 0; i < 8; i++) {
+            this.log(`📜 Scroll ${i + 1}/8...`, 'info');
 
-            // Check if we can see posts
+            // Smooth scroll to bottom
+            await this.page.evaluate(() => {
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            });
+
+            await this.page.waitForTimeout(4000);
+
+            // Check if we can see posts with multiple selectors
             const postCount = await this.page.evaluate(() => {
-                return document.querySelectorAll('a[href*="/p/"]').length;
+                // Multiple selectors for different Instagram layouts
+                const selectors = [
+                    'a[href*="/p/"]',
+                    'a[href*="/reel/"]',
+                    'article a[href*="/p/"]',
+                    'article a[href*="/reel/"]',
+                    'main a[href*="/p/"]',
+                    'main a[href*="/reel/"]',
+                    '[role="main"] a[href*="/p/"]',
+                    '[role="main"] a[href*="/reel/"]'
+                ];
+
+                let totalPosts = 0;
+                selectors.forEach(selector => {
+                    const elements = document.querySelectorAll(selector);
+                    totalPosts = Math.max(totalPosts, elements.length);
+                });
+
+                return totalPosts;
             });
 
             this.log(`📊 Postingan terlihat: ${postCount}`, 'debug');
 
-            if (postCount > 0) {
+            // If we found posts, scroll a bit more to ensure all are loaded
+            if (postCount > 0 && i >= 3) {
+                this.log('📊 Postingan ditemukan, melakukan scroll tambahan...', 'info');
+                for (let j = 0; j < 2; j++) {
+                    await this.page.evaluate(() => {
+                        window.scrollTo({
+                            top: document.body.scrollHeight,
+                            behavior: 'smooth'
+                        });
+                    });
+                    await this.page.waitForTimeout(2000);
+                }
                 break;
             }
         }
 
         // Final scroll to make sure everything is loaded
-        await this.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await this.page.waitForTimeout(2000);
+        await this.page.evaluate(() => {
+            window.scrollTo({
+                top: document.body.scrollHeight,
+                behavior: 'smooth'
+            });
+        });
+        await this.page.waitForTimeout(3000);
 
         this.log('✅ Scroll selesai', 'success');
     }
@@ -526,14 +624,60 @@ class InstagramScraperBot {
             const postsInOrder = await this.page.evaluate((targetUsername) => {
                 const posts = [];
 
-                // Find all post links that belong to the target account
-                // Include both regular posts (/p/) and reels (/reel/)
-                const allPostElements = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]');
+                // Clean username (remove trailing slash if present)
+                const cleanUsername = targetUsername.replace(/\/$/, '');
 
+                console.log(`Debug: Original username: "${targetUsername}"`);
+                console.log(`Debug: Clean username: "${cleanUsername}"`);
+
+                // Multiple selectors for different Instagram layouts and post types
+                const postSelectors = [
+                    'a[href*="/p/"]',
+                    'a[href*="/reel/"]',
+                    'article a[href*="/p/"]',
+                    'article a[href*="/reel/"]',
+                    'main a[href*="/p/"]',
+                    'main a[href*="/reel/"]',
+                    '[role="main"] a[href*="/p/"]',
+                    '[role="main"] a[href*="/reel/"]',
+                    'div[role="main"] a[href*="/p/"]',
+                    'div[role="main"] a[href*="/reel/"]'
+                ];
+
+                // Collect all post elements
+                const allPostElements = [];
+                postSelectors.forEach(selector => {
+                    const elements = document.querySelectorAll(selector);
+                    elements.forEach(element => allPostElements.push(element));
+                });
+
+                // Remove duplicates based on href
+                const uniquePosts = new Map();
                 allPostElements.forEach(element => {
                     const href = element.href;
-                    if (href.includes(`instagram.com/${targetUsername}/p/`) ||
+                    if (!uniquePosts.has(href)) {
+                        uniquePosts.set(href, element);
+                    }
+                });
+
+                // Process each unique post
+                let debugCount = 0;
+                uniquePosts.forEach(element => {
+                    const href = element.href;
+
+                    // Debug: Log first few URLs to see what we're checking
+                    if (debugCount < 5) {
+                        console.log(`Debug: Checking URL: ${href}`);
+                        debugCount++;
+                    }
+
+                    // Check if this post belongs to the target account
+                    // Use both original username and cleaned username for matching
+                    if (href.includes(`instagram.com/${cleanUsername}/p/`) ||
+                        href.includes(`instagram.com/${cleanUsername}/reel/`) ||
+                        href.includes(`instagram.com/${targetUsername}/p/`) ||
                         href.includes(`instagram.com/${targetUsername}/reel/`)) {
+
                         // Get the position of the element in the DOM
                         const rect = element.getBoundingClientRect();
                         const postId = href.match(/\/(?:p|reel)\/([^\/]+)\//)?.[1] || '';
@@ -543,7 +687,8 @@ class InstagramScraperBot {
                             postId: postId,
                             top: rect.top,
                             left: rect.left,
-                            type: href.includes('/reel/') ? 'reel' : 'post'
+                            type: href.includes('/reel/') ? 'reel' : 'post',
+                            visible: rect.top >= 0 && rect.left >= 0 && rect.top < window.innerHeight
                         });
                     }
                 });
@@ -563,11 +708,68 @@ class InstagramScraperBot {
 
             this.log(`📊 Total postingan ditemukan: ${postsInOrder.length}`, 'debug');
 
-            this.log(`📝 12 postingan teratas (berdasarkan urutan visual):`, 'info');
-            postsInOrder.slice(0, 12).forEach((post, index) => {
-                const typeIcon = post.type === 'reel' ? '🎬' : '📸';
-                this.log(`   ${index + 1}. ${typeIcon} ${post.type.toUpperCase()} - ${post.url}`, 'debug');
-            });
+            // Log detailed information about found posts
+            if (postsInOrder.length > 0) {
+                this.log(`📝 ${Math.min(postsInOrder.length, 12)} postingan teratas (berdasarkan urutan visual):`, 'info');
+                postsInOrder.slice(0, 12).forEach((post, index) => {
+                    const typeIcon = post.type === 'reel' ? '🎬' : '📸';
+                    const visibilityIcon = post.visible ? '👁️' : '🙈';
+                    this.log(`   ${index + 1}. ${typeIcon} ${visibilityIcon} ${post.type.toUpperCase()} - ${post.url}`, 'debug');
+                });
+            } else {
+                // Debug: Check what elements are actually present
+                const debugInfo = await this.page.evaluate(() => {
+                    const allLinks = document.querySelectorAll('a[href]');
+                    const instagramLinks = Array.from(allLinks).filter(link =>
+                        link.href && link.href.includes('instagram.com')
+                    );
+
+                    // Get all post-related links
+                    const postLinks = Array.from(allLinks).filter(link =>
+                        link.href && (link.href.includes('/p/') || link.href.includes('/reel/'))
+                    );
+
+                    // Check for common Instagram elements
+                    const mainElement = document.querySelector('main') || document.querySelector('[role="main"]');
+                    const articles = document.querySelectorAll('article');
+
+                    return {
+                        totalLinks: allLinks.length,
+                        instagramLinks: instagramLinks.length,
+                        postLinks: postLinks.length,
+                        sampleLinks: instagramLinks.slice(0, 5).map(link => link.href),
+                        samplePostLinks: postLinks.slice(0, 5).map(link => link.href),
+                        pageTitle: document.title,
+                        bodyText: document.body.innerText.substring(0, 200),
+                        currentUrl: window.location.href,
+                        hasMainElement: !!mainElement,
+                        articleCount: articles.length,
+                        isPrivateAccount: document.body.innerText.toLowerCase().includes('private')
+                    };
+                });
+
+                this.log(`🔍 Debug info:`, 'debug');
+                this.log(`   Current URL: ${debugInfo.currentUrl}`, 'debug');
+                this.log(`   Total links: ${debugInfo.totalLinks}`, 'debug');
+                this.log(`   Instagram links: ${debugInfo.instagramLinks}`, 'debug');
+                this.log(`   Post links: ${debugInfo.postLinks}`, 'debug');
+                this.log(`   Sample links: ${debugInfo.sampleLinks.join(', ')}`, 'debug');
+                this.log(`   Sample post links: ${debugInfo.samplePostLinks.join(', ')}`, 'debug');
+                this.log(`   Page title: ${debugInfo.pageTitle}`, 'debug');
+                this.log(`   Has main element: ${debugInfo.hasMainElement}`, 'debug');
+                this.log(`   Article count: ${debugInfo.articleCount}`, 'debug');
+                this.log(`   Is private account: ${debugInfo.isPrivateAccount}`, 'debug');
+                this.log(`   Body preview: ${debugInfo.bodyText}...`, 'debug');
+
+                // Take screenshot for debugging
+                try {
+                    const screenshotPath = `temp/debug_${targetUsername}_${Date.now()}.png`;
+                    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+                    this.log(`📸 Screenshot saved: ${screenshotPath}`, 'debug');
+                } catch (screenshotError) {
+                    this.log(`⚠️ Could not take screenshot: ${screenshotError.message}`, 'warning');
+                }
+            }
 
             return postsInOrder.slice(0, 12).map(post => post.url);
 

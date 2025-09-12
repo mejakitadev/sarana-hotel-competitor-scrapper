@@ -106,7 +106,7 @@ router.get('/today', async (req, res) => {
                 AND hsl.search_timestamp >= $1 
                 AND hsl.search_timestamp <= $2
             ORDER BY hsl.search_timestamp DESC
-            LIMIT 5
+            LIMIT 10
         `;
 
         const swissDebugResult = await pool.query(swissDebugQuery, [utcStartTime, utcEndTime]);
@@ -114,6 +114,95 @@ router.get('/today', async (req, res) => {
         swissDebugResult.rows.forEach((row, index) => {
             console.log(`  Debug ${index}: Hotel=${row.hotel_name}, Status=${row.status}, Price=${row.room_price}, Time=${row.search_timestamp}, Hour=${row.hour}`);
         });
+
+        // Check if Swiss-Belinn data passes the main query filters
+        const swissFilteredQuery = `
+            SELECT 
+                hd.id as hotel_id,
+                hd.hotel_name,
+                hsl.search_timestamp,
+                hsl.room_price,
+                hsl.status,
+                EXTRACT(HOUR FROM hsl.search_timestamp) as hour
+            FROM hotel_data hd
+            LEFT JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
+            WHERE hd.hotel_name ILIKE '%swiss%belinn%'
+                AND hsl.search_timestamp >= $1 
+                AND hsl.search_timestamp <= $2
+                AND hsl.status = 'success'
+                AND hsl.room_price IS NOT NULL
+            ORDER BY hsl.search_timestamp DESC
+            LIMIT 10
+        `;
+
+        const swissFilteredResult = await pool.query(swissFilteredQuery, [utcStartTime, utcEndTime]);
+        console.log(`🏨 Swiss-Belinn filtered query found ${swissFilteredResult.rows.length} records:`);
+        swissFilteredResult.rows.forEach((row, index) => {
+            console.log(`  Filtered ${index}: Hotel=${row.hotel_name}, Status=${row.status}, Price=${row.room_price}, Time=${row.search_timestamp}, Hour=${row.hour}`);
+        });
+
+        // Check if Swiss-Belinn exists in hotel_data table
+        const hotelDataQuery = `
+            SELECT id, hotel_name 
+            FROM hotel_data 
+            WHERE hotel_name ILIKE '%swiss%belinn%'
+        `;
+
+        const hotelDataResult = await pool.query(hotelDataQuery);
+        console.log(`🏨 Swiss-Belinn in hotel_data table: ${hotelDataResult.rows.length} records`);
+        hotelDataResult.rows.forEach((row, index) => {
+            console.log(`  Hotel data ${index}: ID=${row.id}, Name=${row.hotel_name}`);
+        });
+
+        // If Swiss-Belinn exists in hotel_data, check its scraping data
+        if (hotelDataResult.rows.length > 0) {
+            const swissHotelId = hotelDataResult.rows[0].id;
+            const swissScrapingQuery = `
+                SELECT 
+                    hsl.search_timestamp,
+                    hsl.room_price,
+                    hsl.status,
+                    EXTRACT(HOUR FROM hsl.search_timestamp) as hour
+                FROM hotel_scraping_results_log hsl
+                WHERE hsl.hotel_id = $1
+                    AND hsl.search_timestamp >= $2 
+                    AND hsl.search_timestamp <= $3
+                ORDER BY hsl.search_timestamp DESC
+                LIMIT 5
+            `;
+
+            const swissScrapingResult = await pool.query(swissScrapingQuery, [swissHotelId, utcStartTime, utcEndTime]);
+            console.log(`🏨 Swiss-Belinn scraping data: ${swissScrapingResult.rows.length} records`);
+            swissScrapingResult.rows.forEach((row, index) => {
+                console.log(`  Scraping ${index}: Status=${row.status}, Price=${row.room_price}, Time=${row.search_timestamp}, Hour=${row.hour}`);
+            });
+
+            // Check if Swiss-Belinn data passes the main query filters
+            const swissMainQuery = `
+                SELECT 
+                    hd.id as hotel_id,
+                    hd.hotel_name,
+                    hsl.search_timestamp,
+                    hsl.room_price,
+                    hsl.status,
+                    EXTRACT(HOUR FROM hsl.search_timestamp) as hour
+                FROM hotel_data hd
+                LEFT JOIN hotel_scraping_results_log hsl ON hd.id = hsl.hotel_id
+                WHERE hd.id = $1
+                    AND hsl.search_timestamp >= $2 
+                    AND hsl.search_timestamp <= $3
+                    AND hsl.status = 'success'
+                    AND hsl.room_price IS NOT NULL
+                ORDER BY hsl.search_timestamp DESC
+                LIMIT 5
+            `;
+
+            const swissMainResult = await pool.query(swissMainQuery, [swissHotelId, utcStartTime, utcEndTime]);
+            console.log(`🏨 Swiss-Belinn main query result: ${swissMainResult.rows.length} records`);
+            swissMainResult.rows.forEach((row, index) => {
+                console.log(`  Main ${index}: Hotel=${row.hotel_name}, Status=${row.status}, Price=${row.room_price}, Time=${row.search_timestamp}, Hour=${row.hour}`);
+            });
+        }
 
         // Group data by hotel and hour
         const hotelHourlyData = {};
@@ -156,6 +245,13 @@ router.get('/today', async (req, res) => {
         console.log(`🏨 Swiss-Belinn rows found: ${swissBelinnRows.length}`);
         swissBelinnRows.forEach((row, index) => {
             console.log(`  Swiss-Belinn ${index}: Hotel=${row.hotel_name}, UTC Hour=${row.hour}, WIB Hour=${(parseInt(row.hour) + 7) % 24}, Price=${row.room_price}, Time=${row.search_timestamp}`);
+        });
+
+        // Show all unique hotels in the result
+        const uniqueHotels = [...new Set(result.rows.map(row => row.hotel_name))];
+        console.log(`🏨 All hotels in main query result (${uniqueHotels.length} hotels):`);
+        uniqueHotels.forEach((hotel, index) => {
+            console.log(`  ${index + 1}. ${hotel}`);
         });
 
         // Process results - Convert UTC hour to WIB hour
@@ -216,7 +312,18 @@ router.get('/today', async (req, res) => {
         if (swissBelinnKey) {
             const swissBelinnData = hotelHourlyData[swissBelinnKey];
             console.log(`🏨 Swiss-Belinn chart data:`, swissBelinnData.prices);
+            console.log(`🏨 Swiss-Belinn at 15:00:`, swissBelinnData.prices['15:00']);
             console.log(`🏨 Swiss-Belinn at 14:00:`, swissBelinnData.prices['14:00']);
+            console.log(`🏨 Swiss-Belinn at 13:00:`, swissBelinnData.prices['13:00']);
+            console.log(`🏨 Swiss-Belinn at 12:00:`, swissBelinnData.prices['12:00']);
+            console.log(`🏨 Swiss-Belinn at 11:00:`, swissBelinnData.prices['11:00']);
+            console.log(`🏨 Swiss-Belinn at 10:00:`, swissBelinnData.prices['10:00']);
+            console.log(`🏨 Swiss-Belinn at 09:00:`, swissBelinnData.prices['09:00']);
+            console.log(`🏨 Swiss-Belinn at 08:00:`, swissBelinnData.prices['08:00']);
+            console.log(`🏨 Swiss-Belinn at 07:00:`, swissBelinnData.prices['07:00']);
+            console.log(`🏨 Swiss-Belinn at 06:00:`, swissBelinnData.prices['06:00']);
+            console.log(`🏨 Swiss-Belinn at 05:00:`, swissBelinnData.prices['05:00']);
+            console.log(`🏨 Swiss-Belinn at 04:00:`, swissBelinnData.prices['04:00']);
         } else {
             console.log('❌ Swiss-Belinn not found in hotelHourlyData');
             console.log('🏨 Available hotels:', Object.values(hotelHourlyData).map(h => h.hotel_name));

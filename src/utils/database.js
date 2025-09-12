@@ -43,6 +43,7 @@ class DatabaseManager {
             // Buat tabel jika belum ada
             await this.createTables();
             await this.createSocmedTablesIfNotExists();
+            await this.createUserAccountsTableIfNotExists();
 
             return true;
         } catch (error) {
@@ -213,6 +214,142 @@ class DatabaseManager {
             console.log(chalk.green('✅ Tabel Social Media berhasil dibuat'));
         } catch (error) {
             console.log(chalk.red(`❌ Gagal membuat tabel Social Media: ${error.message}`));
+        }
+    }
+
+    async createUserAccountsTableIfNotExists() {
+        try {
+            // Check if table already exists
+            const checkTableQuery = `
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'user_accounts';
+            `;
+
+            const result = await this.pool.query(checkTableQuery);
+
+            // If table exists, check if username column exists
+            if (result.rows.length > 0) {
+                console.log(chalk.blue('ℹ️ Tabel user_accounts sudah ada, checking for username column...'));
+
+                // Check if username column exists
+                const checkColumnQuery = `
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'user_accounts' 
+                    AND column_name = 'username';
+                `;
+
+                const columnResult = await this.pool.query(checkColumnQuery);
+
+                if (columnResult.rows.length === 0) {
+                    console.log(chalk.yellow('🔄 Adding username column to existing table...'));
+
+                    // Add username column
+                    const addUsernameColumnQuery = `
+                        ALTER TABLE user_accounts 
+                        ADD COLUMN username VARCHAR(100) UNIQUE;
+                        
+                        CREATE INDEX IF NOT EXISTS idx_user_accounts_username ON user_accounts(username);
+                    `;
+
+                    await this.pool.query(addUsernameColumnQuery);
+                    console.log(chalk.green('✅ Username column added successfully'));
+                } else {
+                    console.log(chalk.blue('ℹ️ Username column already exists'));
+                }
+
+                return;
+            }
+
+            console.log(chalk.yellow('🔄 Membuat tabel user_accounts...'));
+
+            // Create user_accounts table
+            const createUserAccountsTableQuery = `
+                CREATE TABLE IF NOT EXISTS user_accounts (
+                    id SERIAL PRIMARY KEY,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    username VARCHAR(100) UNIQUE NOT NULL,
+                    password VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_user_accounts_email ON user_accounts(email);
+                CREATE INDEX IF NOT EXISTS idx_user_accounts_username ON user_accounts(username);
+                CREATE INDEX IF NOT EXISTS idx_user_accounts_created_at ON user_accounts(created_at);
+            `;
+
+            await this.pool.query(createUserAccountsTableQuery);
+
+            console.log(chalk.green('✅ Tabel user_accounts berhasil dibuat'));
+        } catch (error) {
+            console.log(chalk.red(`❌ Gagal membuat tabel user_accounts: ${error.message}`));
+        }
+    }
+
+    // User Account Management Functions
+    async createUserAccount(email, username, passwordHash) {
+        try {
+            const query = `
+                INSERT INTO user_accounts (email, username, password)
+                VALUES ($1, $2, $3)
+                RETURNING id, email, username, created_at
+            `;
+            const result = await this.pool.query(query, [email, username, passwordHash]);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error creating user account: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getUserByEmail(email) {
+        try {
+            const query = `
+                SELECT id, email, username, password, created_at, updated_at
+                FROM user_accounts 
+                WHERE email = $1
+            `;
+            const result = await this.pool.query(query, [email]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting user by email: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async updateUserPassword(userId, newPasswordHash) {
+        try {
+            const query = `
+                UPDATE user_accounts 
+                SET password = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id, email, updated_at
+            `;
+            const result = await this.pool.query(query, [userId, newPasswordHash]);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error updating user password: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getAllUsers(limit = 50, offset = 0) {
+        try {
+            const query = `
+                SELECT id, email, created_at, updated_at
+                FROM user_accounts 
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+            `;
+            const result = await this.pool.query(query, [limit, offset]);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting all users: ${error.message}`));
+            throw error;
         }
     }
 

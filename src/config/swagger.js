@@ -19,6 +19,14 @@ const options = {
             }
         ],
         components: {
+            securitySchemes: {
+                bearerAuth: {
+                    type: 'http',
+                    scheme: 'bearer',
+                    bearerFormat: 'JWT',
+                    description: 'JWT token untuk authentication'
+                }
+            },
             schemas: {
                 Hotel: {
                     type: 'object',
