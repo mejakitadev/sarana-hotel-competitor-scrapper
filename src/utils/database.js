@@ -337,10 +337,94 @@ class DatabaseManager {
         }
     }
 
+    async getAllUsers() {
+        try {
+            const query = `
+                SELECT id, email, username, created_at, updated_at
+                FROM user_accounts 
+                ORDER BY created_at DESC
+            `;
+            const result = await this.pool.query(query);
+            return result.rows;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting all users: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async getUserById(id) {
+        try {
+            const query = `
+                SELECT id, email, username, password, created_at, updated_at
+                FROM user_accounts 
+                WHERE id = $1
+            `;
+            const result = await this.pool.query(query, [id]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error getting user by ID: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async updateUserAccount(id, updateData) {
+        try {
+            const fields = [];
+            const values = [];
+            let paramCount = 1;
+
+            if (updateData.email) {
+                fields.push(`email = $${paramCount}`);
+                values.push(updateData.email);
+                paramCount++;
+            }
+            if (updateData.username) {
+                fields.push(`username = $${paramCount}`);
+                values.push(updateData.username);
+                paramCount++;
+            }
+            if (updateData.password) {
+                fields.push(`password = $${paramCount}`);
+                values.push(updateData.password);
+                paramCount++;
+            }
+
+            fields.push(`updated_at = CURRENT_TIMESTAMP`);
+            values.push(id);
+
+            const query = `
+                UPDATE user_accounts 
+                SET ${fields.join(', ')}
+                WHERE id = $${paramCount}
+                RETURNING id, email, username, created_at, updated_at
+            `;
+
+            const result = await this.pool.query(query, values);
+            return result.rows[0];
+        } catch (error) {
+            console.log(chalk.red(`❌ Error updating user account: ${error.message}`));
+            throw error;
+        }
+    }
+
+    async deleteUserAccount(id) {
+        try {
+            const query = `
+                DELETE FROM user_accounts 
+                WHERE id = $1
+            `;
+            await this.pool.query(query, [id]);
+            return true;
+        } catch (error) {
+            console.log(chalk.red(`❌ Error deleting user account: ${error.message}`));
+            throw error;
+        }
+    }
+
     async getAllUsers(limit = 50, offset = 0) {
         try {
             const query = `
-                SELECT id, email, created_at, updated_at
+                SELECT id, email, username, created_at, updated_at
                 FROM user_accounts 
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
